@@ -1,0 +1,406 @@
+---
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { getInbox, markAllRead, updateMessage } from "../lib/data";
+import { formatDate, timeAgo } from "../lib/format";
+import { done, field } from "../lib/http";
+
+const FILTERS = ["all", "unread", "starred", "archived", "Academic", "Enrolment", "Finance", "Graduation", "Wellbeing", "Admin"] as const;
+const LINKS: Record<string, { href: string; label: string }> = {
+  Enrolment: { href: "/enrolment/", label: "Open Enrolment" },
+  Finance: { href: "/account/#charges", label: "Open Charges to Pay" },
+  Academic: { href: "/timetable/", label: "Open Timetables" },
+  Graduation: { href: "/graduation/", label: "Open Graduation" },
+  Admin: { href: "/account/", label: "Open Account Details" },
+  Wellbeing: { href: "/resources/", label: "Open Additional Resources" },
+};
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const intent = field(form, "intent", 20);
+  const id = Number(form.get("id"));
+  const filter = field(form, "filter", 20) || "all";
+  const back = `/messages/?filter=${encodeURIComponent(filter)}${id ? `&id=${id}` : ""}`;
+  if (intent === "readAll") {
+    markAllRead();
+    return done(`/messages/?filter=${encodeURIComponent(filter)}`, { ok: true, message: "All messages marked as read" });
+  }
+  if (!Number.isInteger(id)) return done(back, { ok: false, message: "Message not found." });
+  if (intent === "star") updateMessage(id, { starred: form.get("value") === "1" });
+  if (intent === "unread") {
+    updateMessage(id, { read: false });
+    return done(`/messages/?filter=${encodeURIComponent(filter)}`, { ok: true, message: "Marked as unread" });
+  }
+  if (intent === "archive") {
+    const value = form.get("value") === "1";
+    updateMessage(id, { archived: value });
+    return done(`/messages/?filter=${encodeURIComponent(filter)}`, { ok: true, message: value ? "Archived" : "Moved back to inbox" });
+  }
+  return done(back, { ok: true, message: form.get("value") === "1" ? "Starred" : "Unstarred" });
+}
+
+const filterParam = Astro.url.searchParams.get("filter") ?? "all";
+const filter = (FILTERS as readonly string[]).includes(filterParam) ? filterParam : "all";
+const selectedId = Number(Astro.url.searchParams.get("id"));
+if (selectedId) updateMessage(selectedId, { read: true });
+
+const all = getInbox();
+const unread = all.filter((m) => !m.read && !m.archived).length;
+const list = all.filter((m) => {
+  if (filter === "archived") return m.archived;
+  if (m.archived) return false;
+  if (filter === "unread") return !m.read;
+  if (filter === "starred") return m.starred;
+  if (filter === "all") return true;
+  return m.category === filter;
+});
+const selected = all.find((m) => m.id === selectedId);
+const counts = Object.fromEntries(FILTERS.map((f) => [f, all.filter((m) => (f === "archived" ? m.archived : !m.archived && (f === "all" || (f === "unread" ? !m.read : f === "starred" ? m.starred : m.category === f)))).length]));
+const q = (id?: number, f = filter) => `/messages/?filter=${encodeURIComponent(f)}${id ? `&id=${id}` : ""}`;
+const ICON: Record<string, string> = { Academic: "records", Enrolment: "enrol", Finance: "wallet", Graduation: "cap", Wellbeing: "heart", Admin: "megaphone" };
+---
+
+<Shell title="Student Messages" nav="messages" art="hero-messages">
+  <Hero art="hero-messages" eyebrow="Student Messages" icon="mail" favourite={{ path: "/messages/", label: "Student Messages" }}>
+    <h1 id="page-title" slot="title">{unread ? <><em>{unread} new</em> {unread === 1 ? "message" : "messages"}</> : <>You're <em>all caught up</em></>}</h1>
+    <p class="hero__lede" slot="lede">Everything ANU sends you, in one inbox — each message links straight to the place you can act on it.</p>
+  </Hero>
+
+  <nav class="filters rise" aria-label="Message filters" style="--i:1">
+    {
+      FILTERS.filter((f) => counts[f] > 0 || ["all", "unread", "starred", "archived"].includes(f)).map((f) => (
+        <a href={q(undefined, f)} aria-current={f === filter ? "page" : undefined} data-astro-prefetch="false">
+          {f === "all" ? "Inbox" : f[0].toUpperCase() + f.slice(1)}
+          <span class="n">{counts[f]}</span>
+        </a>
+      ))
+    }
+  </nav>
+
+  <div class="mail rise" style="--i:2">
+    <section class="card card--flush mail__list" aria-labelledby="list-title">
+      <div class="mail__bar">
+        <h2 id="list-title">{filter === "all" ? "Inbox" : filter[0].toUpperCase() + filter.slice(1)}</h2>
+        {
+          unread > 0 && (
+            <form method="post" action="/messages/">
+              <input type="hidden" name="intent" value="readAll" />
+              <input type="hidden" name="filter" value={filter} />
+              <button class="btn btn--quiet btn--sm" type="submit">
+                <Icon name="check" size={16} /> Mark all read
+              </button>
+            </form>
+          )
+        }
+      </div>
+      {
+        list.length ? (
+          <ul class="threads">
+            {list.map((m) => (
+              <li>
+                <a class:list={["thread", !m.read && "thread--unread", m.id === selectedId && "thread--active"]} href={q(m.id)} data-astro-prefetch="false" aria-current={m.id === selectedId ? "true" : undefined}>
+                  <span class="thread__icon" aria-hidden="true">
+                    <Icon name={ICON[m.category] ?? "mail"} size={18} />
+                  </span>
+                  <span class="thread__body">
+                    <span class="thread__top">
+                      <strong>{m.sender}</strong>
+                      <small>{timeAgo(m.sentAt)}</small>
+                    </span>
+                    <span class="thread__subject">
+                      {!m.read && <span class="sr-only">Unread: </span>}
+                      {m.subject}
+                    </span>
+                    <span class="thread__preview">{m.body}</span>
+                  </span>
+                  {m.starred && <Icon name="star" size={16} class="thread__star" label="Starred" />}
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div class="empty">
+            <img src="/art/spot-sprig.webp" alt="" width="120" height="120" loading="lazy" />
+            <p>Nothing here.</p>
+          </div>
+        )
+      }
+    </section>
+
+    <section class="card mail__reader" aria-labelledby="reader-title" id="reader">
+      {
+        selected ? (
+          <article class="reader">
+            <div class="reader__meta">
+              <span class="chip chip--info">
+                <Icon name={ICON[selected.category] ?? "mail"} />
+                {selected.category}
+              </span>
+              <span class="muted small">{formatDate(selected.sentAt.slice(0, 10), { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>
+            </div>
+            <h2 id="reader-title">{selected.subject}</h2>
+            <p class="reader__from">
+              From <strong>{selected.sender}</strong>
+            </p>
+            <div class="reader__body">
+              <p>{selected.body}</p>
+            </div>
+            {LINKS[selected.category] && (
+              <a class="btn" href={LINKS[selected.category].href}>
+                {LINKS[selected.category].label} <Icon name="arrow-right" size={16} />
+              </a>
+            )}
+            <div class="reader__actions">
+              <form method="post" action="/messages/">
+                <input type="hidden" name="intent" value="star" />
+                <input type="hidden" name="id" value={selected.id} />
+                <input type="hidden" name="filter" value={filter} />
+                <input type="hidden" name="value" value={selected.starred ? "0" : "1"} />
+                <button class="btn btn--ghost btn--sm" type="submit" aria-pressed={selected.starred ? "true" : "false"}>
+                  <Icon name="star" size={16} class={selected.starred ? "filled" : undefined} /> {selected.starred ? "Starred" : "Star"}
+                </button>
+              </form>
+              <form method="post" action="/messages/">
+                <input type="hidden" name="intent" value="unread" />
+                <input type="hidden" name="id" value={selected.id} />
+                <input type="hidden" name="filter" value={filter} />
+                <button class="btn btn--ghost btn--sm" type="submit">
+                  <Icon name="mail" size={16} /> Mark unread
+                </button>
+              </form>
+              <form method="post" action="/messages/">
+                <input type="hidden" name="intent" value="archive" />
+                <input type="hidden" name="id" value={selected.id} />
+                <input type="hidden" name="filter" value={filter} />
+                <input type="hidden" name="value" value={selected.archived ? "0" : "1"} />
+                <button class="btn btn--ghost btn--sm" type="submit">
+                  <Icon name={selected.archived ? "undo" : "archive"} size={16} /> {selected.archived ? "Move to inbox" : "Archive"}
+                </button>
+              </form>
+            </div>
+          </article>
+        ) : (
+          <div class="empty reader-empty">
+            <img src="/art/spot-calendar.webp" alt="" width="160" height="160" loading="lazy" />
+            <h2 id="reader-title" class="h3">Pick a message to read it</h2>
+            <p>Unread messages are marked with a gold edge.</p>
+          </div>
+        )
+      }
+    </section>
+  </div>
+</Shell>
+
+<style>
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: -6px 0 18px;
+  }
+  .filters a {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 99px;
+    background: var(--surface);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    color: var(--ink-2);
+    font-weight: 600;
+    font-size: 0.88rem;
+    text-decoration: none;
+    transition:
+      background var(--fast),
+      color var(--fast);
+  }
+  .filters a[aria-current="page"] {
+    background: var(--teal);
+    color: var(--on-teal);
+    box-shadow: none;
+  }
+  .filters .n {
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 99px;
+    background: var(--surface-3);
+    color: var(--ink-2);
+    font-size: 0.74rem;
+    text-align: center;
+  }
+  .filters a[aria-current="page"] .n {
+    background: rgb(255 255 255 / 22%);
+    color: #fff;
+  }
+  .mail {
+    display: grid;
+    grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+  .mail__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .mail__bar h2 {
+    font-size: 1.05rem;
+  }
+  .threads {
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+    display: grid;
+    gap: 2px;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .thread {
+    position: relative;
+    display: flex;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 14px;
+    color: inherit;
+    text-decoration: none;
+    transition: background var(--fast);
+  }
+  .thread:hover {
+    background: var(--hover);
+  }
+  .thread--active {
+    background: var(--teal-soft);
+  }
+  .thread--unread::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 14px;
+    bottom: 14px;
+    width: 3px;
+    border-radius: 3px;
+    background: var(--gold);
+  }
+  .thread__icon {
+    width: 36px;
+    height: 36px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    background: var(--surface-3);
+    color: var(--ink-2);
+  }
+  .thread__body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+    gap: 1px;
+  }
+  .thread__top {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.84rem;
+  }
+  .thread__top strong {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .thread__top small {
+    flex: none;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .thread__subject {
+    font-size: 0.92rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .thread--unread .thread__subject {
+    font-weight: 700;
+  }
+  .thread__preview {
+    color: var(--muted);
+    font-size: 0.82rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  :global(.thread__star) {
+    color: var(--gold);
+    fill: var(--gold);
+  }
+  .mail__reader {
+    min-height: 420px;
+    padding: 30px;
+  }
+  .reader {
+    display: grid;
+    gap: 14px;
+    justify-items: start;
+    animation: rise 0.4s var(--ease-out) both;
+  }
+  .reader__meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .reader h2 {
+    font-family: var(--font-display);
+    font-size: 1.7rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+  }
+  .reader__from {
+    color: var(--ink-2);
+  }
+  .reader__body {
+    max-width: 62ch;
+    font-size: 1.02rem;
+    line-height: 1.7;
+  }
+  .reader__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    width: 100%;
+  }
+  :global(.filled) {
+    fill: currentColor;
+    color: var(--gold);
+  }
+  .reader-empty {
+    min-height: 360px;
+    align-content: center;
+  }
+  .h3 {
+    font-size: 1.1rem;
+    color: var(--ink);
+  }
+  .small {
+    font-size: 0.86rem;
+  }
+  @media (max-width: 900px) {
+    .mail {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .mail__reader {
+      order: -1;
+    }
+    .mail__reader:has(.reader-empty) {
+      display: none;
+    }
+  }
+</style>

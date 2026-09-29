@@ -1,0 +1,34 @@
+---
+import { pct } from "../lib/rules";
+
+interface Props {
+  completed: number;
+  enrolled: number;
+  planned?: number;
+  total: number;
+  size?: "sm" | "md" | "lg";
+  marks?: boolean;
+  label: string;
+}
+const { completed, enrolled, planned = 0, total, size = "md", marks = false, label } = Astro.props;
+const w = (n: number) => `${Math.max(0, pct(n, total))}%`;
+---
+
+<div
+  class:list={["bar", size === "lg" && "bar--lg", size === "sm" && "bar--sm"]}
+  role="img"
+  aria-label={`${label}: ${completed} of ${total} units completed, ${enrolled} in progress${planned ? `, ${planned} planned` : ""}.`}
+>
+  {completed > 0 && <span class="bar__seg bar__seg--done" style={`--w:${w(completed)}`} />}
+  {enrolled > 0 && <span class="bar__seg bar__seg--now" style={`--w:${w(enrolled)}`} />}
+  {planned > 0 && <span class="bar__seg bar__seg--plan" style={`--w:${w(planned)};--delay:.55s`} />}
+  {
+    marks && (
+      <span class="bar__marks" aria-hidden="true">
+        <span style="--at:25%" />
+        <span style="--at:50%" />
+        <span style="--at:75%" />
+      </span>
+    )
+  }
+</div>

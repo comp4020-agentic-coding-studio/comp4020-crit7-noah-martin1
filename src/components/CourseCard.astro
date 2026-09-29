@@ -1,0 +1,182 @@
+---
+import { BANDS, TERMS } from "../lib/catalog";
+import { formatAUD } from "../lib/format";
+import type { CourseStatus } from "../lib/rules";
+import type { Course } from "../lib/schema";
+import Icon from "./Icon.astro";
+
+interface Props {
+  course: Course;
+  status: CourseStatus;
+  term: string;
+  reason?: string;
+  index?: number;
+}
+const { course, status, term, reason, index = 0 } = Astro.props;
+const band = BANDS[course.band];
+const offered = term.endsWith("S1") ? course.offeredS1 : course.offeredS2;
+const fits = status.fillsKey !== null && status.fillsKey !== "electives";
+const blocked = status.blockers.length > 0 && status.state === "available";
+---
+
+<article
+  class:list={["course rise", status.state !== "available" && `course--${status.state}`, reason && "course--suggested"]}
+  id={`course-${course.code}`}
+  style={`--i:${Math.min(index, 12)}`}
+  data-course
+  data-flash-on-swap
+  data-text={`${course.code} ${course.title} ${course.description} ${course.convener}`.toLowerCase()}
+  data-level={String(course.level)}
+  data-fits={fits ? "true" : "false"}
+  data-offered={offered ? "true" : "false"}
+>
+  {
+    reason && (
+      <p class="course__reason">
+        <Icon name="sparkles" size={15} />
+        {reason}
+      </p>
+    )
+  }
+  <div class="course__top">
+    <span class="code">{course.code}</span>
+    <span class="chip">{course.units} units</span>
+    <span class="chip">{course.level}-level</span>
+    {status.state === "cart" && <span class="chip chip--gold"><Icon name="cart" />In cart</span>}
+    {status.state === "enrolled" && <span class="chip chip--ok"><Icon name="check" />Enrolled</span>}
+    {status.state === "completed" && <span class="chip chip--ok"><Icon name="check" />{status.grade}</span>}
+  </div>
+  <h3>{course.title}</h3>
+  <p class="course__desc">{course.description}</p>
+  <div class="course__tags">
+    <span class:list={["chip", fits ? "chip--ok" : status.fillsKey ? "chip--info" : "chip--block"]}>{status.fills}</span>
+    {status.warnings.map((w) => <span class="chip chip--warn"><Icon name="alert" />{w}</span>)}
+    {status.blockers.filter((b) => status.state === "available" || !b.startsWith("Completed")).map((b) => <span class="chip chip--block"><Icon name="block" />{b}</span>)}
+  </div>
+  <div class="course__foot">
+    <div class="price">
+      <strong>{formatAUD(status.priceCents)}</strong>
+      <small>{band?.label} student contribution</small>
+    </div>
+    {
+      status.state === "available" && (
+        <form method="post" action={`/enrolment/?term=${term}`}>
+          <input type="hidden" name="intent" value="add" />
+          <input type="hidden" name="code" value={course.code} />
+          <input type="hidden" name="term" value={term} />
+          <button class="btn btn--sm" type="submit" disabled={blocked} aria-label={`Add ${course.code} to ${TERMS[term].short} cart`}>
+            <Icon name="plus" size={16} />
+            Add
+          </button>
+        </form>
+      )
+    }
+    {
+      status.state === "cart" && (
+        <form method="post" action={`/enrolment/?term=${term}`}>
+          <input type="hidden" name="intent" value="remove" />
+          <input type="hidden" name="code" value={course.code} />
+          <input type="hidden" name="term" value={term} />
+          <button class="btn btn--sm btn--ghost" type="submit" aria-label={`Remove ${course.code} from cart`}>
+            <Icon name="minus" size={16} />
+            Remove
+          </button>
+        </form>
+      )
+    }
+  </div>
+</article>
+
+<style>
+  .course {
+    display: grid;
+    gap: 10px;
+    align-content: start;
+    padding: 20px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow:
+      var(--shadow-sm),
+      inset 0 0 0 1px var(--line);
+    transition:
+      transform var(--med) var(--ease-out),
+      box-shadow var(--med) var(--ease-out);
+  }
+  .course:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      var(--shadow-md),
+      inset 0 0 0 1px var(--line-strong);
+  }
+  .course[hidden] {
+    display: none;
+  }
+  .course--cart {
+    box-shadow:
+      var(--shadow-sm),
+      inset 0 0 0 1.5px color-mix(in oklab, var(--gold) 70%, transparent);
+    background: linear-gradient(180deg, var(--gold-soft), var(--surface) 55%);
+  }
+  .course--enrolled,
+  .course--completed {
+    background: var(--surface-2);
+  }
+  .course--suggested {
+    background: linear-gradient(160deg, var(--teal-soft), var(--surface) 50%);
+  }
+  .course__reason {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    font-weight: 650;
+    color: var(--teal-strong);
+  }
+  .course__top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .course__top .code {
+    margin-right: 4px;
+    font-size: 0.95rem;
+  }
+  .course h3 {
+    font-size: 1.08rem;
+  }
+  .course__desc {
+    color: var(--muted);
+    font-size: 0.88rem;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .course__tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .course__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 4px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line-strong);
+  }
+  .price {
+    display: grid;
+    line-height: 1.2;
+  }
+  .price strong {
+    font-size: 1.15rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .price small {
+    color: var(--muted);
+    font-size: 0.76rem;
+  }
+</style>

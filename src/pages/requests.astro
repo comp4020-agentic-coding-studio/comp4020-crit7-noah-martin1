@@ -1,0 +1,220 @@
+---
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { createRequest, getRequests } from "../lib/data";
+import { timeAgo } from "../lib/format";
+import { done, field } from "../lib/http";
+
+const TYPES = [
+  { key: "special", label: "Special consideration", icon: "heart", blurb: "Illness or hardship affected an assessment or exam.", days: 5 },
+  { key: "overload", label: "Overload (more than 24 units)", icon: "enrol", blurb: "Ask to take more than a full-time load next semester.", days: 7 },
+  { key: "credit", label: "Credit for prior study", icon: "records", blurb: "Count study you've done elsewhere toward your degree.", days: 15 },
+  { key: "transfer", label: "Program transfer", icon: "route", blurb: "Move into a different degree or add a major.", days: 10 },
+  { key: "leave", label: "Leave of absence", icon: "clock", blurb: "Take a semester or more away from study.", days: 5 },
+  { key: "transcript", label: "Official transcript", icon: "printer", blurb: "A certified record for employers or other universities.", days: 3 },
+  { key: "whs", label: "WHS Incident Notification", icon: "alert", blurb: "Report an injury, hazard or near miss on campus.", days: 1 },
+  { key: "general", label: "General enquiry", icon: "inbox", blurb: "Anything else — the Student Hub will route it.", days: 3 },
+] as const;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const type = TYPES.find((t) => t.key === form.get("type"));
+  const subject = field(form, "subject", 120);
+  let details = field(form, "details", 2000);
+  if (!type || !subject || details.length < 10) return done(`/requests/?type=${type?.key ?? "general"}#new`, { ok: false, message: "Add a subject and at least a sentence of detail." });
+  if (type.key === "whs") {
+    const when = field(form, "when", 20);
+    const where = field(form, "where", 120);
+    details = `When: ${when || "not given"} · Where: ${where || "not given"}\n${details}`;
+  }
+  const row = createRequest(type.label, subject, details);
+  return done(`/requests/#request-${row.id}`, { ok: true, message: `${type.label} submitted — reference REQ-${String(row.id).padStart(5, "0")}` });
+}
+
+const selected = TYPES.find((t) => t.key === Astro.url.searchParams.get("type")) ?? TYPES[0];
+const mine = getRequests();
+const open = mine.filter((r) => r.status === "Submitted" || r.status === "In review").length;
+const STEPS = ["Submitted", "In review", "Approved", "Closed"] as const;
+---
+
+<Shell title="Requests" nav="requests" art="hero-requests">
+  <Hero art="hero-requests" eyebrow="Requests" icon="inbox" favourite={{ path: "/requests/", label: "Requests" }}>
+    <h1 id="page-title" slot="title">Ask once, <em>track it all the way</em></h1>
+    <p class="hero__lede" slot="lede">One place for every form — special consideration, credit, overloads, WHS incidents and more. Each request shows where it's up to and when to expect an answer.</p>
+    <div class="hero__stats">
+      <a class="stat-pill" href="#mine"><small>Open requests</small><strong>{open}</strong></a>
+      <a class="stat-pill" href="#mine"><small>All time</small><strong>{mine.length}</strong></a>
+    </div>
+  </Hero>
+
+  <section aria-labelledby="types-title">
+    <div class="section-head">
+      <h2 id="types-title">What do you need?</h2>
+    </div>
+    <div class="grid grid-auto types">
+      {
+        TYPES.map((t, i) => (
+          <a class:list={["card type rise", t.key === selected.key && "type--active", t.key === "whs" && "type--whs"]} href={`/requests/?type=${t.key}#new`} style={`--i:${i}`} aria-current={t.key === selected.key ? "true" : undefined}>
+            <span class:list={["card__icon", t.key === "whs" ? "card__icon--rust" : "card__icon--plain"]}>
+              <Icon name={t.icon} />
+            </span>
+            <strong>{t.label}</strong>
+            <span class="muted">{t.blurb}</span>
+            <small class="muted">Usually answered in {t.days} business day{t.days > 1 ? "s" : ""}</small>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <div class="split section">
+    <section class="card" id="new" aria-labelledby="new-title" data-flash-on-swap>
+      <div class="card__head">
+        <span class:list={["card__icon", selected.key === "whs" ? "card__icon--rust" : ""]}><Icon name={selected.icon} /></span>
+        <h2 id="new-title">{selected.label}</h2>
+      </div>
+      {
+        selected.key === "whs" && (
+          <div class="alert alert--block whs-note">
+            <Icon name="alert" />
+            <div>
+              <strong>If anyone is in immediate danger, call 000 first.</strong>
+              <p>Use this form once everyone is safe. Reports go to the WHS team and your supervisor within one business day.</p>
+            </div>
+          </div>
+        )
+      }
+      <form method="post" action="/requests/" class="stack">
+        <div class="field">
+          <label for="type">Request type</label>
+          <select class="select" id="type" name="type" data-nav="/requests/?type={v}#new">
+            {TYPES.map((t) => <option value={t.key} selected={t.key === selected.key}>{t.label}</option>)}
+          </select>
+        </div>
+        {
+          selected.key === "whs" && (
+            <div class="form-grid">
+              <div class="field">
+                <label for="when">When did it happen?</label>
+                <input class="input" id="when" name="when" type="date" />
+              </div>
+              <div class="field">
+                <label for="where">Where?</label>
+                <input class="input" id="where" name="where" maxlength="120" placeholder="Building and room" />
+              </div>
+            </div>
+          )
+        }
+        <div class="field">
+          <label for="subject">Subject</label>
+          <input class="input" id="subject" name="subject" maxlength="120" required placeholder={selected.key === "special" ? "e.g. COMP3670 assignment 3 — illness" : "A short summary"} />
+        </div>
+        <div class="field">
+          <label for="details">Details</label>
+          <textarea class="textarea" id="details" name="details" maxlength="2000" minlength="10" required data-count="details-count" placeholder="What happened, what you're asking for, and any dates that matter."></textarea>
+          <small id="details-count" aria-live="polite">0 / 2000</small>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn--lg" type="submit"><Icon name="arrow-right" size={18} />Submit request</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="mine" aria-labelledby="mine-title">
+      <div class="section-head">
+        <h2 id="mine-title">Your requests</h2>
+      </div>
+      {
+        mine.length ? (
+          <ul class="reqs">
+            {mine.map((r, i) => {
+              const step = STEPS.indexOf(r.status);
+              return (
+                <li class="card req rise" id={`request-${r.id}`} data-flash-on-swap style={`--i:${i}`}>
+                  <div class="row row--between">
+                    <span class="muted small mono">REQ-{String(r.id).padStart(5, "0")}</span>
+                    <span class:list={["chip", r.status === "Approved" ? "chip--ok" : r.status === "Closed" ? "" : "chip--info"]}>{r.status}</span>
+                  </div>
+                  <strong>{r.subject}</strong>
+                  <span class="muted small">
+                    {r.kind} · submitted {timeAgo(r.createdAt)}
+                  </span>
+                  <ol class="steps" aria-label={`Progress: ${r.status}`}>
+                    {STEPS.map((s, k) => (
+                      <li class:list={[k <= step && "on"]}>
+                        <span class="sr-only">{s}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p class="muted">No requests yet.</p>
+        )
+      }
+    </section>
+  </div>
+</Shell>
+
+<style>
+  .types {
+    grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr));
+  }
+  .type {
+    display: grid;
+    gap: 6px;
+    align-content: start;
+  }
+  .type .muted {
+    font-size: 0.88rem;
+  }
+  .type small.muted {
+    font-size: 0.76rem;
+    margin-top: 4px;
+  }
+  .type--active {
+    box-shadow:
+      var(--shadow-md),
+      inset 0 0 0 2px var(--teal) !important;
+  }
+  .type--whs {
+    background: linear-gradient(160deg, var(--rust-soft), var(--surface) 60%);
+  }
+  .whs-note {
+    margin-bottom: 16px;
+  }
+  .reqs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 12px;
+  }
+  .req {
+    display: grid;
+    gap: 6px;
+    padding: 18px;
+  }
+  .small {
+    font-size: 0.84rem;
+  }
+  .steps {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+  .steps li {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--track);
+  }
+  .steps li.on {
+    background: var(--teal);
+  }
+</style>

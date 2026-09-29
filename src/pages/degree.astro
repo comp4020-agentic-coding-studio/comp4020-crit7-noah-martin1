@@ -1,0 +1,511 @@
+---
+import Checks from "../components/Checks.astro";
+import DegreeBar from "../components/DegreeBar.astro";
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Ring from "../components/Ring.astro";
+import Shell from "../layouts/Shell.astro";
+import { PLANNING_TERM, TERMS, TERM_ORDER } from "../lib/catalog";
+import { getCourses } from "../lib/data";
+import { formatAUD } from "../lib/format";
+import { loadHub } from "../lib/hub";
+import { milestones, pct, policyChecks, suggestions } from "../lib/rules";
+
+const hub = loadHub();
+const { student, rows, progress } = hub;
+const courses = getCourses();
+const checks = policyChecks({ rows, term: PLANNING_TERM, progress, gpaValue: hub.gpa });
+const picks = suggestions(courses, PLANNING_TERM, rows, progress, 6);
+const done = Math.round(pct(progress.completed, progress.total));
+const withNow = Math.round(pct(progress.completed + progress.enrolled, progress.total));
+const passed = rows.filter((r) => r.status === "completed" && r.grade !== "N").length;
+const moments = milestones(rows, progress.total);
+
+const planTerms = TERM_ORDER.filter((t) => rows.some((r) => r.term === t && r.status !== "dropped"));
+if (!planTerms.includes(PLANNING_TERM)) planTerms.push(PLANNING_TERM);
+const lastTerm = progress.remaining > 0 ? "2027-S2" : planTerms[planTerms.length - 1];
+if (!planTerms.includes(lastTerm)) planTerms.push(lastTerm);
+
+const MARKS = [
+  { at: 25, label: "First quarter" },
+  { at: 50, label: "Halfway" },
+  { at: 75, label: "Final stretch" },
+  { at: 100, label: "Graduate" },
+];
+const message =
+  withNow >= 100 ? "Everything's in place. Time to celebrate." : done >= 75 ? "You're in the final stretch — the finish line is in sight." : done >= 50 ? "Past halfway. Look how far you've come." : "Every course counts. Keep going.";
+---
+
+<Shell title="Degree Management" nav="degree" art="hero-degree">
+  <Hero art="hero-degree" eyebrow="Degree Management · Manage my Degree" icon="route" favourite={{ path: "/degree/", label: "Degree Management" }}>
+    <h1 id="page-title" slot="title">You're <em>{done}%</em> of the way there, {student.preferredName}.</h1>
+    <p class="hero__lede" slot="lede">
+      {passed} courses passed, {progress.completed} of {progress.total} units in the bag. {message}
+    </p>
+    <div class="hero__stats">
+      <span class="stat-pill"><small>Completed</small><strong><span class="count" style={`--to:${progress.completed}`} aria-hidden="true"></span><span class="sr-only">{progress.completed}</span> units</strong></span>
+      <span class="stat-pill"><small>After this semester</small><strong>{withNow}%</strong></span>
+      <a class="stat-pill" href="/records/"><small>GPA</small><strong>{hub.gpa.toFixed(2)}</strong></a>
+      <a class="stat-pill" href="/graduation/"><small>Expected finish</small><strong>Dec 2027</strong></a>
+    </div>
+  </Hero>
+
+  <section class="card journey rise" style="--i:1" aria-labelledby="journey-title" data-celebrate-on-load={done >= 50 ? "" : undefined}>
+    <div class="row row--between row--wrap">
+      <div>
+        <h2 id="journey-title">{student.programName}</h2>
+        <p class="muted">{student.majorName} major · {student.programCode} · {progress.total} units</p>
+      </div>
+      <button class="btn btn--gold" type="button" data-celebrate>
+        <Icon name="sparkles" size={18} /> Celebrate progress
+      </button>
+    </div>
+    <div class="journey__track">
+      <DegreeBar completed={progress.completed} enrolled={progress.enrolled} planned={progress.planned} total={progress.total} size="lg" label="Degree progress" />
+      <ol class="journey__marks">
+        {
+          MARKS.map((m) => (
+            <li class:list={[done >= m.at && "reached"]} style={`--at:${m.at}%`}>
+              <span class="dot" aria-hidden="true">{done >= m.at ? <Icon name="check" size={12} /> : null}</span>
+              <span class="lbl">
+                {m.label}
+                <small>{m.at}%</small>
+              </span>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+    <div class="legend">
+      <span><i class="l-done"></i>Completed · {progress.completed} units</span>
+      <span><i class="l-now"></i>In progress · {progress.enrolled}</span>
+      {progress.planned > 0 && <span><i class="l-plan"></i>Planned · {progress.planned}</span>}
+      <span><i class="l-left"></i>Still to plan · {progress.remaining}</span>
+    </div>
+  </section>
+
+  <section class="section" id="requirements" aria-labelledby="req-title">
+    <div class="section-head">
+      <div>
+        <h2 id="req-title">Requirements</h2>
+        <p>Each course counts once, toward the first requirement it can fill.</p>
+      </div>
+    </div>
+    <div class="grid grid-2">
+      {
+        progress.groups.map((g, i) => {
+          const left = g.remaining;
+          const complete = g.completed >= g.group.units;
+          return (
+            <article class="card req rise" style={`--i:${i}`}>
+              <div class="req__head">
+                <Ring completed={g.completed} enrolled={g.enrolled} planned={g.planned} total={g.group.units} size={78} label={g.group.title} />
+                <div>
+                  <h3>{g.group.title}</h3>
+                  <p class="muted">{g.group.description}</p>
+                  <p class="req__units">
+                    {complete ? (
+                      <span class="chip chip--ok">
+                        <Icon name="check" />
+                        Complete
+                      </span>
+                    ) : left === 0 ? (
+                      <span class="chip chip--info">On track — finishing now</span>
+                    ) : (
+                      <span class="chip chip--warn">{left} units to plan</span>
+                    )}
+                    <span class="muted">
+                      {g.completed + g.enrolled + g.planned} / {g.group.units} units
+                    </span>
+                  </p>
+                </div>
+              </div>
+              <ul class="req__courses">
+                {g.items.map(({ row }) => (
+                  <li class:list={["pill", `pill--${row.status}`]} title={row.course.title}>
+                    <span class="code">{row.courseCode}</span>
+                    {row.status === "completed" && <span class="pill__grade">{row.grade}</span>}
+                    {row.status === "enrolled" && <span class="pill__grade">now</span>}
+                    {row.status === "cart" && <span class="pill__grade">planned</span>}
+                  </li>
+                ))}
+                {left > 0 && (
+                  <li class="pill pill--todo">
+                    <a href={g.codes.length ? `/enrolment/#catalogue` : "/enrolment/"}>+ {left} units</a>
+                  </li>
+                )}
+              </ul>
+            </article>
+          );
+        })
+      }
+    </div>
+  </section>
+
+  <div class="split section">
+    <section id="plan" aria-labelledby="plan-title">
+      <div class="section-head">
+        <div>
+          <h2 id="plan-title">Your study plan</h2>
+          <p>From your first semester to graduation.</p>
+        </div>
+      </div>
+      <ol class="timeline">
+        {
+          planTerms.map((key, i) => {
+            const items = rows.filter((r) => r.term === key && r.status !== "dropped");
+            const units = items.reduce((s, r) => s + r.course.units, 0);
+            const state = items.some((r) => r.status === "enrolled") ? "now" : items.every((r) => r.status === "completed") && items.length ? "done" : "future";
+            return (
+              <li class:list={["term", `term--${state}`, "rise"]} style={`--i:${i}`}>
+                <span class="term__node" aria-hidden="true">{state === "done" ? <Icon name="check" size={14} /> : null}</span>
+                <div class="term__body">
+                  <p class="term__label">
+                    <strong>{TERMS[key].label}</strong>
+                    <span class="muted">{units ? `${units} units` : "Not planned yet"}</span>
+                    {state === "now" && <span class="chip chip--ok">Now</span>}
+                  </p>
+                  <ul class="term__courses">
+                    {items.map((r) => (
+                      <li class:list={["pill", `pill--${r.status}`]} title={r.course.title}>
+                        <span class="code">{r.courseCode}</span>
+                        {r.grade && <span class="pill__grade">{r.grade}</span>}
+                      </li>
+                    ))}
+                    {!items.length && (
+                      <li>
+                        <a class="link-arrow" href={`/enrolment/?term=${key}`}>
+                          Plan this semester <Icon name="arrow-right" size={15} />
+                        </a>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </li>
+            );
+          })
+        }
+        <li class="term term--grad rise" style={`--i:${planTerms.length}`}>
+          <span class="term__node" aria-hidden="true"><Icon name="cap" size={14} /></span>
+          <div class="term__body">
+            <p class="term__label"><strong>Graduation</strong><span class="muted">December 2027 (expected)</span></p>
+            <a class="link-arrow" href="/graduation/">Plan your celebration <Icon name="arrow-right" size={15} /></a>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <div class="stack">
+      <section class="card" id="policy" aria-labelledby="policy-title">
+        <div class="card__head">
+          <span class="card__icon"><Icon name="shield" /></span>
+          <h2 id="policy-title">Completion rules</h2>
+        </div>
+        <p class="muted small">Checked live against your record and your {TERMS[PLANNING_TERM].short} plan.</p>
+        <Checks checks={checks} />
+      </section>
+
+      <section class="card" aria-labelledby="next-title">
+        <div class="card__head">
+          <span class="card__icon card__icon--gold"><Icon name="sparkles" /></span>
+          <h2 id="next-title">Good next courses</h2>
+        </div>
+        {
+          picks.length ? (
+            <ul class="list">
+              {picks.map((p) => (
+                <li class="pick">
+                  <span>
+                    <span class="code">{p.course.code}</span> {p.course.title}
+                    <small>{p.reason}</small>
+                  </span>
+                  <span class="pick__price">{formatAUD(p.priceCents)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p class="muted">Your plan already covers every requirement.</p>
+          )
+        }
+        <a class="btn btn--block" href="/enrolment/" style="margin-top:14px">Open enrolment <Icon name="arrow-right" size={16} /></a>
+      </section>
+    </div>
+  </div>
+
+  {
+    moments.length > 0 && (
+      <section class="section" aria-labelledby="moments-title">
+        <div class="section-head">
+          <div>
+            <h2 id="moments-title">Moments worth celebrating</h2>
+            <p>Your degree, told by its highlights.</p>
+          </div>
+        </div>
+        <div class="grid grid-auto">
+          {moments.map((m, i) => (
+            <div class="card moment rise" style={`--i:${i}`}>
+              <span class="card__icon card__icon--gold">
+                <Icon name="trophy" />
+              </span>
+              <strong>{m.title}</strong>
+              <p class="muted">{m.detail}</p>
+              <small class="muted">{TERMS[m.term].label}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+    )
+  }
+
+  <section class="section card card--tint" aria-labelledby="program-title">
+    <div class="card__head">
+      <span class="card__icon card__icon--plain"><Icon name="records" /></span>
+      <h2 id="program-title">Program details</h2>
+    </div>
+    <dl class="kv">
+      <dt>Program</dt><dd>{student.programName} ({student.programCode})</dd>
+      <dt>Major</dt><dd>{student.majorName}</dd>
+      <dt>Admitted</dt><dd>{TERMS[student.admitTerm]?.label}</dd>
+      <dt>Academic standing</dt><dd><span class="chip chip--ok">Good standing</span></dd>
+      <dt>Units required</dt><dd>{progress.total}</dd>
+      <dt>Expected completion</dt><dd>Semester 2 2027</dd>
+    </dl>
+  </section>
+</Shell>
+
+<style>
+  .journey {
+    display: grid;
+    gap: 22px;
+    padding: 28px;
+    background: radial-gradient(100% 160% at 100% 0%, var(--gold-soft), transparent 55%), var(--surface);
+  }
+  .journey h2 {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 600;
+  }
+  .journey__track {
+    position: relative;
+    padding-bottom: 46px;
+  }
+  .journey__marks {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .journey__marks li {
+    position: absolute;
+    top: 6px;
+    left: var(--at);
+    transform: translateX(-50%);
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+  }
+  .journey__marks li:last-child {
+    transform: translateX(-100%);
+    justify-items: end;
+  }
+  .journey__marks .dot {
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    margin-top: -6px;
+    border-radius: 50%;
+    background: var(--surface);
+    box-shadow: inset 0 0 0 2px var(--line-strong);
+    color: #fff;
+  }
+  .journey__marks .reached .dot {
+    background: var(--teal);
+    box-shadow: 0 0 0 4px var(--teal-soft);
+    animation: pop 0.6s var(--ease-spring) both 1.1s;
+  }
+  .journey__marks .lbl {
+    display: grid;
+    justify-items: inherit;
+    font-size: 0.8rem;
+    font-weight: 650;
+    white-space: nowrap;
+    margin-top: 16px;
+  }
+  .journey__marks .lbl small {
+    color: var(--muted);
+    font-weight: 550;
+  }
+  .req {
+    display: grid;
+    gap: 14px;
+  }
+  .req__head {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+  }
+  .req__head p {
+    font-size: 0.88rem;
+    margin-top: 3px;
+  }
+  .req__units {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px !important;
+  }
+  .req__courses,
+  .term__courses {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 4px 10px;
+    border-radius: 10px;
+    font-size: 0.8rem;
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .pill__grade {
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    background: var(--surface-3);
+  }
+  .pill--completed {
+    background: var(--gold-soft);
+    box-shadow: none;
+  }
+  .pill--completed .pill__grade {
+    background: rgb(255 255 255 / 55%);
+    color: var(--gold-ink);
+  }
+  .pill--enrolled {
+    background: var(--teal-soft);
+    box-shadow: none;
+  }
+  .pill--cart {
+    box-shadow: inset 0 0 0 1.5px dashed var(--rust);
+    outline: 1.5px dashed color-mix(in oklab, var(--rust) 60%, transparent);
+    outline-offset: -1.5px;
+  }
+  .pill--todo {
+    padding: 4px 10px;
+    background: transparent;
+    outline: 1.5px dashed var(--line-strong);
+    outline-offset: -1.5px;
+    box-shadow: none;
+  }
+  .pill--todo a {
+    color: var(--teal-strong);
+    font-weight: 650;
+    text-decoration: none;
+  }
+  .timeline {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 8px;
+    position: relative;
+  }
+  .timeline::before {
+    content: "";
+    position: absolute;
+    left: 18px;
+    top: 10px;
+    bottom: 10px;
+    width: 2px;
+    background: linear-gradient(var(--gold), var(--teal) 70%, var(--line-strong));
+  }
+  .term {
+    position: relative;
+    display: flex;
+    gap: 16px;
+    padding: 0 0 18px;
+  }
+  .term__node {
+    position: relative;
+    z-index: 1;
+    width: 22px;
+    height: 22px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    margin-top: 2px;
+    border-radius: 50%;
+    background: var(--surface);
+    box-shadow: inset 0 0 0 2px var(--line-strong);
+    color: #fff;
+  }
+  .term--done .term__node {
+    background: var(--gold);
+    box-shadow: 0 0 0 4px var(--gold-soft);
+  }
+  .term--now .term__node {
+    background: var(--teal);
+    box-shadow: 0 0 0 4px var(--teal-soft);
+    animation: pulse-teal 2.2s ease-in-out infinite;
+  }
+  .term--grad .term__node {
+    background: var(--rust);
+    box-shadow: 0 0 0 4px var(--rust-soft);
+  }
+  @keyframes pulse-teal {
+    50% {
+      box-shadow: 0 0 0 9px transparent;
+    }
+  }
+  .term__body {
+    flex: 1;
+    display: grid;
+    gap: 8px;
+    padding: 12px 16px;
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow:
+      var(--shadow-sm),
+      inset 0 0 0 1px var(--line);
+  }
+  .term__label {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .small {
+    font-size: 0.86rem;
+    margin-bottom: 12px;
+  }
+  .pick {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .pick small {
+    display: block;
+    color: var(--teal-strong);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .pick__price {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .moment {
+    display: grid;
+    gap: 6px;
+    align-content: start;
+  }
+  .moment p {
+    font-size: 0.9rem;
+  }
+</style>

@@ -1,0 +1,53 @@
+---
+import type { Check } from "../lib/rules";
+import Icon from "./Icon.astro";
+
+interface Props {
+  checks: Check[];
+  compact?: boolean;
+}
+const { checks, compact = false } = Astro.props;
+const ICON = { ok: "ok", info: "info", warn: "alert", block: "block" } as const;
+const order = { block: 0, warn: 1, info: 2, ok: 3 } as const;
+const sorted = [...checks].sort((a, b) => order[a.level] - order[b.level]);
+---
+
+<ul class="checks" role="list">
+  {
+    sorted.map((c, i) => (
+      <li class={`alert alert--${c.level}`} style={`animation-delay:${i * 50}ms`} data-check={c.id}>
+        <Icon name={ICON[c.level]} />
+        <div class="checks__body">
+          <strong>{c.title}</strong>
+          {!compact && <p>{c.detail}</p>}
+          {c.meter && c.meter.max <= 12 && (
+            <div class="meter" style={`--max:${Math.max(c.meter.max, c.meter.value)}`} aria-hidden="true">
+              {Array.from({ length: Math.max(c.meter.max, c.meter.value) }, (_, k) => (
+                <span class:list={[k < c.meter!.value && "on", k >= c.meter!.max && "over"]} style={`--i:${k}`} />
+              ))}
+            </div>
+          )}
+        </div>
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .checks {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+  .checks__body {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+  .meter {
+    margin-top: 8px;
+  }
+</style>

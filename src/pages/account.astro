@@ -1,0 +1,458 @@
+---
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { BANDS, CURRENT_TERM, PLANNING_TERM, TERMS, TERM_ORDER, coursePriceCents } from "../lib/catalog";
+import { deferCharge, getPayments, payCharge, updateStudent } from "../lib/data";
+import { daysUntil, formatAUD, formatDate, mask, relativeDay, timeAgo } from "../lib/format";
+import { done, field } from "../lib/http";
+import { loadHub } from "../lib/hub";
+import { termCost } from "../lib/rules";
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const intent = field(form, "intent", 20);
+  const id = Number(form.get("chargeId"));
+  if (intent === "pay") return done("/account/#charges", payCharge(id, field(form, "method", 20) || "Card"));
+  if (intent === "defer") return done("/account/#charges", deferCharge(id));
+  if (intent === "payment") {
+    const option = form.get("paymentOption") === "upfront" ? "upfront" : "help";
+    updateStudent({ paymentOption: option });
+    return done("/account/#fees", { ok: true, message: option === "help" ? "Future tuition will defer to HECS-HELP" : "Future tuition will be invoiced upfront" });
+  }
+  if (intent === "caf") {
+    if (form.get("declare") !== "on") return done("/account/#caf", { ok: false, message: "Tick the declaration to submit your form." });
+    updateStudent({ cafSubmittedFor: PLANNING_TERM.slice(0, 4), tfnProvided: true });
+    return done("/account/#caf", { ok: true, message: `${PLANNING_TERM.slice(0, 4)} Commonwealth Assistance Form submitted` });
+  }
+  if (intent === "bank") {
+    const bankName = field(form, "bankName", 60);
+    const bsb = field(form, "bankBsb", 10).replace(/\D/g, "");
+    const account = field(form, "bankAccount", 12).replace(/\D/g, "");
+    if (!bankName || bsb.length !== 6 || account.length < 6 || account.length > 10) {
+      return done("/account/#bank", { ok: false, message: "Check the BSB (6 digits) and account number (6–10 digits)." });
+    }
+    updateStudent({ bankName, bankBsb: bsb, bankAccount: account });
+    return done("/account/#bank", { ok: true, message: "Refund account saved" });
+  }
+  return done("/account/", { ok: false, message: "Unknown action." });
+}
+
+const hub = loadHub();
+const { student, charges, unpaid, rows, today } = hub;
+const payments = getPayments();
+const unpaidTotal = unpaid.reduce((s, c) => s + c.amountCents, 0);
+const nextDue = [...unpaid].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
+const helpTotal = charges.filter((c) => c.status === "deferred").reduce((s, c) => s + c.amountCents, 0);
+const paidThisYear = payments.filter((p) => p.paidAt.startsWith(today.slice(0, 4))).reduce((s, p) => s + p.amountCents, 0);
+const breakdownTerms = [CURRENT_TERM, PLANNING_TERM];
+const statementTerms = [...new Set(charges.map((c) => c.term))].sort((a, b) => TERM_ORDER.indexOf(b) - TERM_ORDER.indexOf(a));
+const cafYear = PLANNING_TERM.slice(0, 4);
+const STATUS: Record<string, string> = { unpaid: "chip--warn", paid: "chip--ok", deferred: "chip--info", credited: "" };
+const LABEL: Record<string, string> = { unpaid: "To pay", paid: "Paid", deferred: "HECS-HELP", credited: "Credited" };
+---
+
+<Shell title="Account Details" nav="account" art="hero-account">
+  <Hero art="hero-account" eyebrow="Account Details · Charges to Pay" icon="wallet" favourite={{ path: "/account/", label: "Account Details" }}>
+    <h1 id="page-title" slot="title">{unpaid.length ? <>Charges to pay: <em>{formatAUD(unpaidTotal)}</em></> : <>You're <em>all paid up</em></>}</h1>
+    <p class="hero__lede" slot="lede">No surprises. Every charge shows what it's for, when it's due and exactly how it was calculated — before and after you enrol.</p>
+    <div class="hero__stats">
+      {nextDue && <a class="stat-pill" href="#charges"><small>Next due · {relativeDay(nextDue.dueDate, today)}</small><strong>{formatDate(nextDue.dueDate, { day: "numeric", month: "short" })}</strong></a>}
+      <a class="stat-pill" href="#fees"><small>Deferred to HECS-HELP</small><strong>{formatAUD(helpTotal)}</strong></a>
+      <a class="stat-pill" href="#payments"><small>Paid in {today.slice(0, 4)}</small><strong>{formatAUD(paidThisYear)}</strong></a>
+      <a class="stat-pill" href="#fees"><small>Tuition payment</small><strong>{student.paymentOption === "help" ? "HECS-HELP" : "Upfront"}</strong></a>
+    </div>
+  </Hero>
+
+  <section id="charges" aria-labelledby="charges-title">
+    <div class="section-head">
+      <div>
+        <h2 id="charges-title">Charges to Pay</h2>
+        <p>Pay by card or BPAY, or defer eligible fees to a HELP loan.</p>
+      </div>
+    </div>
+    {
+      unpaid.length ? (
+        <div class="grid grid-2">
+          {unpaid.map((c, i) => {
+            const d = daysUntil(c.dueDate, today);
+            return (
+              <article class="card charge rise" style={`--i:${i}`} id={`charge-${c.id}`} data-flash-on-swap>
+                <div class="row row--between">
+                  <span class={`chip ${d < 0 ? "chip--block" : d <= 14 ? "chip--warn" : ""}`}>
+                    <Icon name="clock" />
+                    {d < 0 ? `Overdue by ${-d} days` : `Due ${relativeDay(c.dueDate, today).toLowerCase()}`}
+                  </span>
+                  <span class="chip">{c.kind === "ssaf" ? "SSAF" : c.kind === "fine" ? "Library" : c.kind === "tuition" ? "Tuition" : "Other"}</span>
+                </div>
+                <p class="charge__amount">{formatAUD(c.amountCents)}</p>
+                <h3>{c.description}</h3>
+                <p class="muted small">
+                  {TERMS[c.term]?.label} · due {formatDate(c.dueDate, { weekday: "short", day: "numeric", month: "long", year: "numeric" })}
+                </p>
+                <div class="row row--wrap charge__actions">
+                  <form method="post" action="/account/">
+                    <input type="hidden" name="intent" value="pay" />
+                    <input type="hidden" name="chargeId" value={c.id} />
+                    <input type="hidden" name="method" value="Card" />
+                    <button class="btn" type="submit" data-confirm-title={`Pay ${formatAUD(c.amountCents)}?`} data-confirm={`We'll charge your saved card ending 4821 for “${c.description}”.`} data-confirm-ok="Pay now">
+                      <Icon name="card" size={17} /> Pay {formatAUD(c.amountCents)}
+                    </button>
+                  </form>
+                  {(c.kind === "ssaf" || c.kind === "tuition") && (
+                    <form method="post" action="/account/">
+                      <input type="hidden" name="intent" value="defer" />
+                      <input type="hidden" name="chargeId" value={c.id} />
+                      <button class="btn btn--ghost" type="submit" data-confirm-title="Defer to a HELP loan?" data-confirm={`${formatAUD(c.amountCents)} is added to your ${c.kind === "ssaf" ? "SA-HELP" : "HECS-HELP"} debt and repaid through the tax system once you earn above the threshold.`} data-confirm-ok="Defer">
+                        Defer to {c.kind === "ssaf" ? "SA-HELP" : "HECS-HELP"}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div class="card empty">
+          <img src="/art/spot-coins.webp" alt="" width="120" height="120" loading="lazy" />
+          <p>Nothing to pay right now. We'll tell you the moment that changes.</p>
+        </div>
+      )
+    }
+  </section>
+
+  <section class="section" id="fees" aria-labelledby="fees-title">
+    <div class="section-head">
+      <div>
+        <h2 id="fees-title">How your fees are calculated</h2>
+        <p>Student contribution = the band's yearly rate × units ÷ 48.</p>
+      </div>
+      <form method="post" action="/account/" class="no-print">
+        <input type="hidden" name="intent" value="payment" />
+        <fieldset class="pay-seg">
+          <legend class="sr-only">How you pay tuition</legend>
+          <div class="seg">
+            <label><input type="radio" name="paymentOption" value="help" checked={student.paymentOption === "help"} data-autosubmit />Defer to HECS-HELP</label>
+            <label><input type="radio" name="paymentOption" value="upfront" checked={student.paymentOption === "upfront"} data-autosubmit />Pay upfront</label>
+          </div>
+        </fieldset>
+        <noscript><button class="btn btn--sm btn--ghost">Save</button></noscript>
+      </form>
+    </div>
+    <div class="grid grid-2">
+      {
+        breakdownTerms.map((term, ti) => {
+          const cost = termCost(rows, term, student);
+          return (
+            <div class="card card--flush rise" style={`--i:${ti}`}>
+              <div class="fees__head">
+                <h3>{TERMS[term].label}</h3>
+                <span class="muted small">Census {formatDate(TERMS[term].census)}</span>
+              </div>
+              {cost.items.length ? (
+                <div class="table-wrap">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Course</th>
+                        <th scope="col">Band</th>
+                        <th scope="col" class="num">Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cost.items.map(({ row, priceCents }) => (
+                        <tr>
+                          <td>
+                            <span class="code">{row.courseCode}</span>
+                            <small class="block muted">
+                              {row.course.units} units{row.status === "cart" ? " · in cart" : ""}
+                            </small>
+                          </td>
+                          <td>
+                            {BANDS[row.course.band].label}
+                            <small class="block muted">{formatAUD(BANDS[row.course.band].eftslCents)}/yr</small>
+                          </td>
+                          <td class="num">{formatAUD(priceCents)}</td>
+                        </tr>
+                      ))}
+                      <tr>
+                        <td colspan="2">Services &amp; amenities fee</td>
+                        <td class="num">{formatAUD(cost.ssafCents)}</td>
+                      </tr>
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <th scope="row" colspan="2">Total</th>
+                        <td class="num strong">{formatAUD(cost.tuitionCents + cost.ssafCents)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              ) : (
+                <p class="muted fees__empty">
+                  Nothing planned yet. <a href={`/enrolment/?term=${term}`}>Plan {TERMS[term].short}</a> to see a live estimate.
+                </p>
+              )}
+            </div>
+          );
+        })
+      }
+    </div>
+    <details class="disclosure section-sm">
+      <summary>
+        <span class="card__icon card__icon--plain"><Icon name="info" /></span>
+        <strong>Funding bands, HECS-HELP and SSAF explained</strong>
+        <Icon name="chevron-down" class="chev" />
+      </summary>
+      <div class="explain">
+        <div class="grid grid-2">
+          {
+            Object.values(BANDS).map((b) => (
+              <div class="band">
+                <strong>
+                  {b.label} · {formatAUD(b.eftslCents)} a year
+                </strong>
+                <span class="muted">{b.areas}</span>
+                <span class="small">6-unit course: {formatAUD(coursePriceCents(b.band, 6))}</span>
+              </div>
+            ))
+          }
+        </div>
+        <p class="muted small">
+          <strong>HECS-HELP</strong> lets you defer your student contribution; it's repaid through tax once your income passes the threshold. <strong>SSAF</strong> funds student services and can be deferred with SA-HELP. Figures are sample data for this prototype.
+        </p>
+      </div>
+    </details>
+  </section>
+
+  <div class="split section">
+    <section id="statement" aria-labelledby="statement-title">
+      <div class="section-head">
+        <h2 id="statement-title">Statement</h2>
+      </div>
+      <div class="stack">
+        {
+          statementTerms.map((term, i) => {
+            const items = charges.filter((c) => c.term === term);
+            const total = items.filter((c) => c.status !== "credited").reduce((s, c) => s + c.amountCents, 0);
+            return (
+              <details class="disclosure" open={i === 0}>
+                <summary>
+                  <strong>{TERMS[term]?.label ?? term}</strong>
+                  <span class="muted">
+                    {items.length} items · {formatAUD(total)}
+                  </span>
+                  <Icon name="chevron-down" class="chev" />
+                </summary>
+                <div class="table-wrap">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Item</th>
+                        <th scope="col">Status</th>
+                        <th scope="col" class="num">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((c) => (
+                        <tr>
+                          <td>{c.description}</td>
+                          <td>
+                            <span class={`chip ${STATUS[c.status]}`}>{LABEL[c.status]}</span>
+                          </td>
+                          <td class:list={["num", c.status === "credited" && "struck"]}>{formatAUD(c.amountCents)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            );
+          })
+        }
+      </div>
+    </section>
+
+    <div class="stack">
+      <section class="card" id="caf" aria-labelledby="caf-title" data-flash-on-swap>
+        <div class="card__head">
+          <span class="card__icon"><Icon name="shield" /></span>
+          <h2 id="caf-title">Commonwealth Assistance Form</h2>
+        </div>
+        {
+          student.cafSubmittedFor === cafYear ? (
+            <p class="row">
+              <span class="chip chip--ok">
+                <Icon name="check" />
+                {cafYear} submitted
+              </span>
+              <span class="muted small">You can defer {cafYear} fees with HECS-HELP.</span>
+            </p>
+          ) : (
+            <form method="post" action="/account/" class="stack">
+              <input type="hidden" name="intent" value="caf" />
+              <p class="muted small">
+                Your {student.cafSubmittedFor} form is on file. You need a new one before you can defer {cafYear} fees. Tax file number: {student.tfnProvided ? "provided ✓" : "not provided"}.
+              </p>
+              <label class="declare">
+                <input type="checkbox" name="declare" required />
+                <span>I declare the information I've given is correct and I request a HECS-HELP loan for {cafYear}.</span>
+              </label>
+              <button class="btn" type="submit">
+                Submit {cafYear} form
+              </button>
+            </form>
+          )
+        }
+      </section>
+
+      <section class="card" id="bank" aria-labelledby="bank-title" data-flash-on-swap>
+        <div class="card__head">
+          <span class="card__icon card__icon--gold"><Icon name="building" /></span>
+          <h2 id="bank-title">Refund account</h2>
+        </div>
+        {student.bankAccount && <p class="muted small saved">Saved: {student.bankName} · BSB {student.bankBsb.slice(0, 3)}-{student.bankBsb.slice(3)} · {mask(student.bankAccount)}</p>}
+        <form method="post" action="/account/" class="stack">
+          <input type="hidden" name="intent" value="bank" />
+          <div class="field">
+            <label for="bankName">Bank</label>
+            <input class="input" id="bankName" name="bankName" value={student.bankName} maxlength="60" autocomplete="off" required />
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="bankBsb">BSB</label>
+              <input class="input" id="bankBsb" name="bankBsb" inputmode="numeric" pattern="[0-9 -]{6,8}" placeholder="062-000" maxlength="8" required />
+            </div>
+            <div class="field">
+              <label for="bankAccount">Account number</label>
+              <input class="input" id="bankAccount" name="bankAccount" inputmode="numeric" pattern="[0-9 ]{6,12}" maxlength="12" required />
+            </div>
+          </div>
+          <button class="btn btn--ghost" type="submit">{student.bankAccount ? "Update" : "Save"} refund account</button>
+        </form>
+      </section>
+    </div>
+  </div>
+
+  <section class="section" id="payments" aria-labelledby="payments-title">
+    <div class="section-head">
+      <h2 id="payments-title">Payment history</h2>
+    </div>
+    <div class="card card--flush">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Paid</th>
+              <th scope="col">For</th>
+              <th scope="col">Reference</th>
+              <th scope="col" class="num">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              payments.map((p) => (
+                <tr>
+                  <td>{timeAgo(p.paidAt)}</td>
+                  <td>{p.description}</td>
+                  <td class="muted mono">
+                    {p.reference} · {p.method}
+                  </td>
+                  <td class="num">{formatAUD(p.amountCents)}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</Shell>
+
+<style>
+  .charge {
+    display: grid;
+    gap: 6px;
+  }
+  .charge__amount {
+    margin-top: 10px;
+    font-size: 2.2rem;
+    font-weight: 750;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .charge__actions {
+    margin-top: 10px;
+  }
+  .small {
+    font-size: 0.86rem;
+  }
+  .block {
+    display: block;
+  }
+  .strong {
+    font-weight: 750;
+    font-size: 1.05rem;
+  }
+  .struck {
+    text-decoration: line-through;
+    color: var(--muted);
+  }
+  .fees__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 18px 20px 6px;
+  }
+  .fees__empty {
+    padding: 8px 20px 22px;
+  }
+  .table tfoot th,
+  .table tfoot td {
+    padding: 12px 14px;
+    border-top: 1px solid var(--line-strong);
+    text-align: left;
+  }
+  .table tfoot td.num {
+    text-align: right;
+  }
+  .pay-seg {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    min-width: 300px;
+  }
+  .section-sm {
+    margin-top: 16px;
+  }
+  .explain {
+    display: grid;
+    gap: 14px;
+    padding: 0 20px 20px;
+  }
+  .band {
+    display: grid;
+    gap: 2px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--surface-2);
+    font-size: 0.9rem;
+  }
+  .declare {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 0.9rem;
+  }
+  .declare input {
+    margin-top: 4px;
+    accent-color: var(--teal);
+    width: 18px;
+    height: 18px;
+  }
+  .saved {
+    margin-bottom: 12px;
+  }
+</style>

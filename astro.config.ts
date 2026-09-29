@@ -6,6 +6,9 @@ import { defineConfig } from "astro/config";
 export default defineConfig({
   output: "server",
   adapter: node({ mode: "standalone" }),
+  // Pages are fetched on hover/focus, so a click usually lands on HTML that
+  // has already arrived — most of what makes navigation feel instant.
+  prefetch: { prefetchAll: true, defaultStrategy: "hover" },
   security: {
     // Fly's proxy terminates TLS, so naming the deploy domain is what lets
     // Astro trust x-forwarded-proto and accept same-origin form POSTs.

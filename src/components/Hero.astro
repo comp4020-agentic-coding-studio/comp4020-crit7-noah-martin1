@@ -1,0 +1,37 @@
+---
+import { getFavourites } from "../lib/data";
+import Icon from "./Icon.astro";
+
+interface Props {
+  art: string;
+  eyebrow: string;
+  icon: string;
+  favourite?: { path: string; label: string };
+}
+const { art, eyebrow, icon, favourite } = Astro.props;
+const pinned = favourite ? getFavourites().some((f) => f.path === favourite.path) : false;
+---
+
+<section class="hero rise" aria-labelledby="page-title">
+  <div class="hero__art">
+    <img src={`/art/${art}.webp`} alt="" width="1600" height="560" fetchpriority="high" decoding="async" />
+  </div>
+  <div class="hero__body">
+    <span class="eyebrow"><Icon name={icon} size={16} />{eyebrow}</span>
+    <slot name="title" />
+    <slot name="lede" />
+  </div>
+  <slot />
+  {
+    favourite && (
+      <form class="hero__fav no-print" method="post" action="/api/favourite">
+        <input type="hidden" name="path" value={favourite.path} />
+        <input type="hidden" name="label" value={favourite.label} />
+        <input type="hidden" name="back" value={Astro.url.pathname + Astro.url.search} />
+        <button class="icon-btn" type="submit" aria-pressed={pinned ? "true" : "false"} aria-label={pinned ? `Remove ${favourite.label} from favourites` : `Add ${favourite.label} to favourites`}>
+          <Icon name="heart" />
+        </button>
+      </form>
+    )
+  }
+</section>

@@ -1,0 +1,326 @@
+---
+import DegreeBar from "../components/DegreeBar.astro";
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { TERMS } from "../lib/catalog";
+import { updateStudent } from "../lib/data";
+import { daysUntil, formatAUD, formatDate } from "../lib/format";
+import { done, field } from "../lib/http";
+import { loadHub } from "../lib/hub";
+import { milestones } from "../lib/rules";
+
+const CEREMONIES = [
+  { value: "July 2027", date: "2027-07-14", note: "If you finish in Semester 1 2027" },
+  { value: "December 2027", date: "2027-12-13", note: "If you finish in Semester 2 2027 — matches your plan" },
+];
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  if (form.get("intent") === "cancel") {
+    updateStudent({ graduationCeremony: null, graduationAppliedAt: null });
+    return done("/graduation/#intent", { ok: true, message: "Intention to graduate withdrawn" });
+  }
+  const ceremony = CEREMONIES.find((c) => c.value === form.get("ceremony"));
+  const name = field(form, "testamurName", 80);
+  if (!ceremony || !name) return done("/graduation/#intent", { ok: false, message: "Choose a ceremony and confirm your name." });
+  updateStudent({ graduationCeremony: ceremony.value, graduationAppliedAt: new Date().toISOString().slice(0, 19).replace("T", " "), testamurName: name });
+  return done("/graduation/#intent", { ok: true, message: `You're registered for the ${ceremony.value} ceremony 🎓` }, { celebrate: "1" });
+}
+
+const hub = loadHub();
+const { student, progress, unpaid, rows, today } = hub;
+const chosen = CEREMONIES.find((c) => c.value === (student.graduationCeremony ?? "December 2027"))!;
+const countdown = Math.max(0, daysUntil(chosen.date, today));
+const groupsDone = progress.groups.filter((g) => g.completed >= g.group.units).length;
+const plannedLeft = progress.remaining;
+const unpaidTotal = unpaid.reduce((s, c) => s + c.amountCents, 0);
+const moments = milestones(rows, progress.total);
+
+const checklist = [
+  { ok: groupsDone === progress.groups.length, title: `${groupsDone} of ${progress.groups.length} requirements complete`, detail: groupsDone === progress.groups.length ? "Every requirement is satisfied." : `${progress.groups.length - groupsDone} still in progress — Degree Management shows exactly what's left.`, href: "/degree/#requirements" },
+  { ok: plannedLeft === 0, title: plannedLeft === 0 ? "Your remaining units are planned" : `${plannedLeft} units still to plan`, detail: plannedLeft === 0 ? "Everything you need is enrolled or in your cart." : "Add courses for 2027 so your graduation date holds.", href: "/enrolment/" },
+  { ok: unpaid.length === 0, title: unpaid.length ? `Clear ${formatAUD(unpaidTotal)} in charges` : "No outstanding debts", detail: unpaid.length ? "Unpaid charges can hold back your testamur on the day." : "Nothing will hold back your testamur.", href: "/account/#charges" },
+  { ok: !!student.graduationCeremony, title: student.graduationCeremony ? `Registered for ${student.graduationCeremony}` : "Register your intention to graduate", detail: student.graduationCeremony ? `Registered ${formatDate(student.graduationAppliedAt!.slice(0, 10))}.` : "Tell us which ceremony you're aiming for — you can change it later.", href: "#intent" },
+];
+const ready = checklist.filter((c) => c.ok).length;
+---
+
+<Shell title="Graduation" nav="graduation" art="hero-graduation">
+  <Hero art="hero-graduation" eyebrow="Graduation" icon="cap" favourite={{ path: "/graduation/", label: "Graduation" }}>
+    <h1 id="page-title" slot="title">The finish line: <em>{chosen.value}</em></h1>
+    <p class="hero__lede" slot="lede">
+      Finishing a degree is a big deal, and it deserves a proper send-off. Here's everything between you and the stage — and a countdown to enjoy.
+    </p>
+    <div class="hero__stats">
+      <span class="stat-pill"><small>Days to go</small><strong><span class="count" style={`--to:${countdown}`} aria-hidden="true"></span><span class="sr-only">{countdown}</span></strong></span>
+      <span class="stat-pill"><small>Ready</small><strong>{ready} of {checklist.length}</strong></span>
+      <span class="stat-pill"><small>Units to go</small><strong>{progress.total - progress.completed}</strong></span>
+    </div>
+  </Hero>
+
+  <div class="split">
+    <section class="card rise" style="--i:1" aria-labelledby="check-title">
+      <div class="card__head">
+        <span class="card__icon"><Icon name="ok" /></span>
+        <h2 id="check-title">Eligibility checklist</h2>
+        <span class="badge badge--soft">{ready}/{checklist.length}</span>
+      </div>
+      <DegreeBar completed={progress.completed} enrolled={progress.enrolled} planned={progress.planned} total={progress.total} label="Units toward graduation" />
+      <ol class="checklist">
+        {
+          checklist.map((c, i) => (
+            <li class:list={["check", c.ok && "check--ok"]} style={`--i:${i}`}>
+              <span class="check__mark" aria-hidden="true">
+                <Icon name={c.ok ? "check" : "minus"} size={16} />
+              </span>
+              <a href={c.href}>
+                <strong>{c.title}</strong>
+                <small>{c.detail}</small>
+              </a>
+              <span class="sr-only">{c.ok ? "Done" : "To do"}</span>
+            </li>
+          ))
+        }
+      </ol>
+    </section>
+
+    <section class="card intent rise" style="--i:2" id="intent" aria-labelledby="intent-title" data-flash-on-swap data-celebrate-on-load={student.graduationCeremony ? "" : undefined}>
+      <div class="card__head">
+        <span class="card__icon card__icon--gold"><Icon name="cap" /></span>
+        <h2 id="intent-title">{student.graduationCeremony ? "You're on the list" : "Intention to graduate"}</h2>
+      </div>
+      {
+        student.graduationCeremony ? (
+          <div class="stack">
+            <img src="/art/spot-cap.webp" alt="" width="220" height="220" class="intent__art" loading="lazy" />
+            <p>
+              See you at the <strong>{student.graduationCeremony}</strong> ceremony. Your testamur will read <strong>{student.testamurName}</strong>.
+            </p>
+            <div class="row row--wrap">
+              <button class="btn btn--gold" type="button" data-celebrate>
+                <Icon name="sparkles" size={18} /> Celebrate again
+              </button>
+              <form method="post" action="/graduation/">
+                <input type="hidden" name="intent" value="cancel" />
+                <button class="btn btn--quiet" type="submit" data-confirm-title="Withdraw your registration?" data-confirm="You can register again at any time before applications close." data-confirm-ok="Withdraw">
+                  Change or withdraw
+                </button>
+              </form>
+            </div>
+          </div>
+        ) : (
+          <form method="post" action="/graduation/" class="stack">
+            <fieldset class="ceremonies">
+              <legend class="label">Which ceremony?</legend>
+              {CEREMONIES.map((c) => (
+                <label class="ceremony">
+                  <input type="radio" name="ceremony" value={c.value} checked={c.value === "December 2027"} required />
+                  <span>
+                    <strong>{c.value}</strong>
+                    <small>
+                      {formatDate(c.date, { weekday: "long", day: "numeric", month: "long" })} · {c.note}
+                    </small>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <div class="field">
+              <label for="testamurName">Name on your testamur</label>
+              <input class="input" id="testamurName" name="testamurName" value={student.testamurName} maxlength="80" required />
+              <small>Must match your legal name: {student.legalGiven} {student.legalFamily}.</small>
+            </div>
+            <button class="btn btn--lg btn--block" type="submit">
+              <Icon name="cap" size={18} /> Register my intention
+            </button>
+          </form>
+        )
+      }
+    </section>
+  </div>
+
+  <section class="section" aria-labelledby="day-title">
+    <div class="section-head">
+      <h2 id="day-title">Your day, planned</h2>
+    </div>
+    <div class="grid grid-auto">
+      {
+        [
+          { icon: "users", title: "Guest tickets", body: "Bring up to three guests. Tickets are released six weeks before your ceremony." },
+          { icon: "cap", title: "Academic dress", body: "Hire your gown, hood and trencher on campus the morning of — or order ahead." },
+          { icon: "camera", title: "Photos", body: "Official photographers are on stage and around Llewellyn Hall all day." },
+          { icon: "globe", title: "Can't make it?", body: "Graduate in absentia and we'll post your testamur, or join a later ceremony." },
+        ].map((c, i) => (
+          <div class="card rise" style={`--i:${i}`}>
+            <span class="card__icon card__icon--plain">
+              <Icon name={c.icon} />
+            </span>
+            <h3 class="mt">{c.title}</h3>
+            <p class="muted">{c.body}</p>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  {
+    moments.length > 0 && (
+      <section class="section" aria-labelledby="road-title">
+        <div class="section-head">
+          <div>
+            <h2 id="road-title">The road so far</h2>
+            <p>Every milestone on the way to {chosen.value}.</p>
+          </div>
+        </div>
+        <ol class="road" tabindex="0" aria-label="Milestones">
+          {moments.map((m, i) => (
+            <li class="rise" style={`--i:${i}`}>
+              <span class="road__term">{TERMS[m.term].short}</span>
+              <strong>{m.title}</strong>
+              <span class="muted">{m.detail}</span>
+            </li>
+          ))}
+          <li class="road__end rise" style={`--i:${moments.length}`}>
+            <span class="road__term">{chosen.value}</span>
+            <strong>Graduation 🎓</strong>
+            <span class="muted">{countdown} days away.</span>
+          </li>
+        </ol>
+      </section>
+    )
+  }
+</Shell>
+
+<style>
+  .checklist {
+    list-style: none;
+    margin: 18px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+  .check {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    padding: 14px;
+    border-radius: 16px;
+    background: var(--surface-2);
+    animation: rise 0.5s var(--ease-out) both;
+    animation-delay: calc(var(--i) * 70ms + 200ms);
+  }
+  .check a {
+    display: grid;
+    color: inherit;
+    text-decoration: none;
+  }
+  .check a:hover strong {
+    color: var(--teal-strong);
+  }
+  .check small {
+    color: var(--muted);
+  }
+  .check__mark {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--surface);
+    box-shadow: inset 0 0 0 2px var(--line-strong);
+    color: var(--muted);
+  }
+  .check--ok .check__mark {
+    background: var(--teal);
+    box-shadow: 0 0 0 4px var(--teal-soft);
+    color: #fff;
+  }
+  .intent {
+    background: radial-gradient(120% 100% at 100% 0%, var(--gold-soft), transparent 60%), var(--surface);
+  }
+  .intent__art {
+    width: 180px;
+    height: 180px;
+    object-fit: contain;
+    justify-self: center;
+    animation: bob 5s ease-in-out infinite alternate;
+  }
+  @keyframes bob {
+    to {
+      transform: translateY(-8px) rotate(-3deg);
+    }
+  }
+  .ceremonies {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+  .ceremony {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 14px;
+    border-radius: 16px;
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    cursor: pointer;
+    transition:
+      box-shadow var(--fast),
+      background var(--fast);
+  }
+  .ceremony:has(input:checked) {
+    background: var(--gold-soft);
+    box-shadow: inset 0 0 0 2px var(--gold);
+  }
+  .ceremony input {
+    margin-top: 4px;
+    accent-color: var(--teal);
+  }
+  .ceremony span {
+    display: grid;
+  }
+  .ceremony small {
+    color: var(--muted);
+  }
+  .mt {
+    margin: 12px 0 4px;
+  }
+  .road {
+    list-style: none;
+    margin: 0;
+    padding: 6px 0 12px;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(200px, 1fr);
+    gap: 14px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+  }
+  .road li {
+    position: relative;
+    display: grid;
+    gap: 4px;
+    align-content: start;
+    padding: 18px;
+    border-radius: 18px;
+    background: var(--surface);
+    box-shadow:
+      var(--shadow-sm),
+      inset 0 0 0 1px var(--line);
+    scroll-snap-align: start;
+    font-size: 0.9rem;
+  }
+  .road__term {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gold-ink);
+  }
+  .road__end {
+    background: linear-gradient(160deg, var(--gold-soft), var(--surface)) !important;
+  }
+</style>

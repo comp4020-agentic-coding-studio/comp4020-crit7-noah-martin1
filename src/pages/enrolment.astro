@@ -1,0 +1,580 @@
+---
+import Checks from "../components/Checks.astro";
+import CourseCard from "../components/CourseCard.astro";
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { BANDS, CURRENT_TERM, ENROLABLE_TERMS, PLANNING_TERM, TERMS } from "../lib/catalog";
+import { addToCart, confirmCart, dropCourse, getCourses, removeFromCart, updateStudent } from "../lib/data";
+import { formatAUD, formatDate, relativeDay } from "../lib/format";
+import { done, field } from "../lib/http";
+import { loadHub } from "../lib/hub";
+import { courseStatus, policyChecks, suggestions, termCost } from "../lib/rules";
+
+const VIEW_TERMS = [...ENROLABLE_TERMS, CURRENT_TERM];
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const intent = field(form, "intent", 20);
+  const code = field(form, "code", 12).toUpperCase();
+  const term = VIEW_TERMS.includes(field(form, "term", 10)) ? field(form, "term", 10) : PLANNING_TERM;
+  const back = `/enrolment/?term=${term}`;
+  if (intent === "add") return done(`${back}#course-${code}`, addToCart(code, term));
+  if (intent === "remove") return done(`${back}#cart`, removeFromCart(code, term));
+  if (intent === "drop") return done(`${back}#enrolled`, dropCourse(code, term));
+  if (intent === "confirm") {
+    const r = confirmCart(term);
+    return done(`${back}#cart`, r, r.ok ? { celebrate: "1" } : {});
+  }
+  if (intent === "payment") {
+    const option = form.get("paymentOption") === "upfront" ? "upfront" : "help";
+    updateStudent({ paymentOption: option });
+    return done(`${back}#cart`, { ok: true, message: option === "help" ? "You'll defer tuition with HECS-HELP" : "You'll pay tuition upfront by census" });
+  }
+  return done(back, { ok: false, message: "Unknown action." });
+}
+
+const requested = Astro.url.searchParams.get("term") ?? "";
+const term = VIEW_TERMS.includes(requested) ? requested : PLANNING_TERM;
+const t = TERMS[term];
+const planning = ENROLABLE_TERMS.includes(term);
+const q = (Astro.url.searchParams.get("q") ?? "").slice(0, 40);
+
+const hub = loadHub();
+const { student, rows, progress, today } = hub;
+const courses = getCourses();
+const checks = planning ? policyChecks({ rows, term, progress, gpaValue: hub.gpa }) : [];
+const blocking = checks.some((c) => c.level === "block");
+const cart = rows.filter((r) => r.term === term && r.status === "cart");
+const enrolled = rows.filter((r) => r.term === term && r.status === "enrolled");
+const cost = termCost(rows, term, student);
+const cartCost = termCost(rows, term, student, ["cart"]);
+const picks = planning ? suggestions(courses, term, rows, progress) : [];
+const pickCodes = new Set(picks.map((p) => p.course.code));
+const units = cost.items.reduce((s, i) => s + i.row.course.units, 0);
+const censusPassed = today > t.census;
+
+const order = { available: 0, cart: 1, enrolled: 2, completed: 3 } as const;
+const catalogue = courses
+  .map((course) => ({ course, status: courseStatus(course, term, rows, progress) }))
+  .sort((a, b) => order[a.status.state] - order[b.status.state] || a.course.code.localeCompare(b.course.code));
+---
+
+<Shell title="Enrolment" nav="enrolment" art="hero-enrolment">
+  <Hero art="hero-enrolment" eyebrow="Enrolment" icon="enrol" favourite={{ path: "/enrolment/", label: "Enrolment" }}>
+    <h1 id="page-title" slot="title">{planning ? <>Plan <em>{t.label}</em></> : <>Your <em>{t.label}</em> enrolment</>}</h1>
+    <p class="hero__lede" slot="lede">
+      {
+        planning
+          ? `Every course shows exactly what it costs before you add it. Nothing is charged until you confirm, and you can drop for free until census on ${formatDate(t.census, { day: "numeric", month: "long", year: "numeric" })}.`
+          : `Census was ${formatDate(t.census, { day: "numeric", month: "long" })}, so these courses are locked in for fees. You can still withdraw before the academic penalty date.`
+      }
+    </p>
+    <div class="hero__stats">
+      <a class="stat-pill" href="#cart"><small>{planning ? "Planned" : "Enrolled"}</small><strong>{units} units</strong></a>
+      <a class="stat-pill" href="#cart"><small>Semester cost</small><strong>{formatAUD(cost.tuitionCents + cost.ssafCents)}</strong></a>
+      <span class="stat-pill"><small>Census date</small><strong>{formatDate(t.census, { day: "numeric", month: "short" })}</strong></span>
+      <a class="stat-pill" href="/degree/"><small>Left to plan</small><strong>{progress.remaining} units</strong></a>
+    </div>
+  </Hero>
+
+  <nav class="term-tabs rise" aria-label="Choose a semester" style="--i:1">
+    {
+      VIEW_TERMS.map((key) => (
+        <a href={`/enrolment/?term=${key}`} aria-current={key === term ? "page" : undefined}>
+          {TERMS[key].label}
+          <small>{key === CURRENT_TERM ? "Current" : key === PLANNING_TERM ? "Enrolment open" : "Plan ahead"}</small>
+        </a>
+      ))
+    }
+  </nav>
+
+  <div class="split">
+    <div class="stack-lg">
+      {
+        planning && picks.length > 0 && (
+          <section aria-labelledby="picks-title">
+            <div class="section-head">
+              <div>
+                <h2 id="picks-title">Suggested for you</h2>
+                <p>Chosen to finish your requirements on time — all offered in {t.short} with prerequisites met.</p>
+              </div>
+            </div>
+            <div class="grid grid-2">
+              {picks.map((p, i) => (
+                <CourseCard course={p.course} status={courseStatus(p.course, term, rows, progress)} term={term} reason={p.reason} index={i} />
+              ))}
+            </div>
+          </section>
+        )
+      }
+
+      {
+        enrolled.length > 0 && (
+          <section id="enrolled" aria-labelledby="enrolled-title">
+            <div class="section-head">
+              <div>
+                <h2 id="enrolled-title">Enrolled in {t.short}</h2>
+                <p>{censusPassed ? `Census passed on ${formatDate(t.census)} — withdrawing still costs the full contribution.` : `Drop before ${formatDate(t.census)} and you won't be charged.`}</p>
+              </div>
+            </div>
+            <div class="card card--flush">
+              <div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Course</th>
+                      <th scope="col" class="num">Units</th>
+                      <th scope="col" class="num">Contribution</th>
+                      <th scope="col"><span class="sr-only">Actions</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {enrolled.map((r) => {
+                      const price = cost.items.find((i) => i.row.id === r.id)?.priceCents ?? 0;
+                      return (
+                        <tr>
+                          <td>
+                            <span class="code">{r.courseCode}</span> {r.course.title}
+                          </td>
+                          <td class="num">{r.course.units}</td>
+                          <td class="num">{formatAUD(price)}</td>
+                          <td class="num">
+                            <form method="post" action={`/enrolment/?term=${term}`}>
+                              <input type="hidden" name="intent" value="drop" />
+                              <input type="hidden" name="code" value={r.courseCode} />
+                              <input type="hidden" name="term" value={term} />
+                              <button
+                                class="btn btn--sm btn--quiet"
+                                type="submit"
+                                data-confirm-title={`${censusPassed ? "Withdraw from" : "Drop"} ${r.courseCode}?`}
+                                data-confirm={
+                                  censusPassed
+                                    ? `Census has passed, so you'll still be charged ${formatAUD(price)} for ${r.course.title}. Your transcript will show a withdrawal.`
+                                    : `You're before census, so dropping ${r.course.title} costs nothing and removes the ${formatAUD(price)} charge.`
+                                }
+                                data-confirm-ok={censusPassed ? "Withdraw anyway" : "Drop course"}
+                              >
+                                {censusPassed ? "Withdraw" : "Drop"}
+                              </button>
+                            </form>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        )
+      }
+
+      <section id="catalogue" aria-labelledby="catalogue-title">
+        <div class="section-head">
+          <div>
+            <h2 id="catalogue-title">Course catalogue</h2>
+            <p><span data-filter-count>{catalogue.length} courses</span> · prices are your student contribution for {t.short.slice(3)}</p>
+          </div>
+        </div>
+        <div class="filters card">
+          <label class="search">
+            <Icon name="search" size={18} />
+            <span class="sr-only">Search courses</span>
+            <input class="input" type="search" data-filter placeholder="Search by code, title, topic or convener" value={q} />
+          </label>
+          <div class="row row--wrap" role="group" aria-label="Filters">
+            {[1000, 2000, 3000, 4000].map((lvl) => <button type="button" class="filter-chip" data-filter-chip="level" data-value={String(lvl)} aria-pressed="false">{lvl}-level</button>)}
+            <button type="button" class="filter-chip" data-filter-chip="fits" aria-pressed="false"><Icon name="route" size={15} />Counts toward my degree</button>
+            {planning && <button type="button" class="filter-chip" data-filter-chip="offered" aria-pressed={q ? "false" : "true"}><Icon name="calendar" size={15} />Offered in {t.short}</button>}
+          </div>
+        </div>
+        <div class="grid grid-2 catalogue">
+          {
+            catalogue
+              .filter(({ course }) => !pickCodes.has(course.code))
+              .map(({ course, status }, i) => <CourseCard course={course} status={status} term={term} index={i} />)
+          }
+        </div>
+        <div class="empty" data-filter-empty hidden>
+          <img src="/art/spot-sprig.webp" alt="" width="120" height="120" loading="lazy" />
+          <p>No courses match. Try clearing a filter.</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="sticky cart-col" id="cart">
+      <div class="card cart" data-flash-on-swap id="cart-card">
+        <div class="card__head">
+          <span class="card__icon card__icon--gold"><Icon name="cart" /></span>
+          <h2>{planning ? `Your ${t.short} cart` : `${t.short} summary`}</h2>
+          <span class="badge badge--soft">{units} units</span>
+        </div>
+
+        {
+          planning && cart.length === 0 && (
+            <div class="empty">
+              <img src="/art/spot-coins.webp" alt="" width="120" height="120" loading="lazy" />
+              <p>Your cart is empty. Add a course to see exactly what it costs.</p>
+            </div>
+          )
+        }
+        {
+          cart.length > 0 && (
+            <ul class="cart__items">
+              {cartCost.items.map(({ row, priceCents }) => (
+                <li class="cart__item">
+                  <span class="cart__course">
+                    <span class="code">{row.courseCode}</span>
+                    <small>{row.course.title}</small>
+                  </span>
+                  <span class="cart__price">
+                    {formatAUD(priceCents)}
+                    <small>{BANDS[row.course.band].label}</small>
+                  </span>
+                  <form method="post" action={`/enrolment/?term=${term}`}>
+                    <input type="hidden" name="intent" value="remove" />
+                    <input type="hidden" name="code" value={row.courseCode} />
+                    <input type="hidden" name="term" value={term} />
+                    <button class="icon-btn" type="submit" aria-label={`Remove ${row.courseCode}`}>
+                      <Icon name="x" size={18} />
+                    </button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        {
+          enrolled.length > 0 && planning && (
+            <p class="muted small">
+              Plus {enrolled.length} enrolled course{enrolled.length > 1 ? "s" : ""} ({enrolled.reduce((s, r) => s + r.course.units, 0)} units) already confirmed.
+            </p>
+          )
+        }
+
+        <dl class="bill">
+          <div>
+            <dt>Student contribution</dt>
+            <dd>{formatAUD(cost.tuitionCents)}</dd>
+          </div>
+          <div>
+            <dt>Services &amp; amenities fee</dt>
+            <dd>{formatAUD(cost.ssafCents)}</dd>
+          </div>
+          <div class="bill__total">
+            <dt>Total for {t.short}</dt>
+            <dd>{formatAUD(cost.tuitionCents + cost.ssafCents)}</dd>
+          </div>
+          <div class="bill__due">
+            <dt>Due by {formatDate(t.census)}</dt>
+            <dd>{formatAUD(cost.dueNowCents)}</dd>
+          </div>
+          {
+            cost.helpCents > 0 && (
+              <div class="bill__help">
+                <dt>Deferred to HECS-HELP</dt>
+                <dd>{formatAUD(cost.helpCents)}</dd>
+              </div>
+            )
+          }
+        </dl>
+
+        <form method="post" action={`/enrolment/?term=${term}`} class="pay-option">
+          <input type="hidden" name="intent" value="payment" />
+          <input type="hidden" name="term" value={term} />
+          <fieldset>
+            <legend class="label">How will you pay tuition?</legend>
+            <div class="seg">
+              <label><input type="radio" name="paymentOption" value="help" checked={student.paymentOption === "help"} data-autosubmit />HECS-HELP</label>
+              <label><input type="radio" name="paymentOption" value="upfront" checked={student.paymentOption === "upfront"} data-autosubmit />Upfront</label>
+            </div>
+          </fieldset>
+          <noscript><button class="btn btn--sm btn--ghost">Update</button></noscript>
+        </form>
+
+        {
+          planning && (
+            <form method="post" action={`/enrolment/?term=${term}`}>
+              <input type="hidden" name="intent" value="confirm" />
+              <input type="hidden" name="term" value={term} />
+              <button
+                class="btn btn--lg btn--block"
+                type="submit"
+                disabled={cart.length === 0 || blocking}
+                data-confirm-title={`Enrol in ${cart.length} course${cart.length === 1 ? "" : "s"}?`}
+                data-confirm={`You'll be charged ${formatAUD(cartCost.tuitionCents)} in student contributions for ${t.short}${student.paymentOption === "help" ? " (deferred to HECS-HELP)" : ""}. You can drop for free until ${formatDate(t.census)}.`}
+                data-confirm-ok="Confirm enrolment"
+              >
+                <Icon name="check" size={18} />
+                Confirm enrolment
+              </button>
+            </form>
+          )
+        }
+        {blocking && <p class="small warn-text">Resolve the blocked items below to confirm.</p>}
+      </div>
+
+      {
+        planning && (
+          <section class="card" aria-labelledby="checks-title" id="checks">
+            <div class="card__head">
+              <span class="card__icon"><Icon name="shield" /></span>
+              <h2 id="checks-title">Rules check</h2>
+            </div>
+            <Checks checks={checks} />
+          </section>
+        )
+      }
+
+      <details class="disclosure" id="pricing">
+        <summary>
+          <span class="card__icon card__icon--plain"><Icon name="dollar" /></span>
+          <strong>How course prices work</strong>
+          <Icon name="chevron-down" class="chev" />
+        </summary>
+        <div class="pricing">
+          <p class="muted small">
+            Commonwealth supported places pay a student contribution set by the course's funding band. A 6-unit course is one-eighth of a full-time year (48 units).
+          </p>
+          <table class="table">
+            <thead>
+              <tr><th scope="col">Band</th><th scope="col" class="num">Per year</th><th scope="col" class="num">6 units</th></tr>
+            </thead>
+            <tbody>
+              {Object.values(BANDS).map((b) => (
+                <tr>
+                  <td>
+                    <strong>{b.label}</strong>
+                    <small class="block muted">{b.areas}</small>
+                  </td>
+                  <td class="num">{formatAUD(b.eftslCents)}</td>
+                  <td class="num">{formatAUD(Math.round(b.eftslCents / 8))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p class="muted small">Indicative sample figures for this prototype. {relativeDay(t.census, today)} is census for {t.short}.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+</Shell>
+
+<style>
+  .term-tabs {
+    display: flex;
+    gap: 8px;
+    margin: -6px 0 26px;
+    padding: 5px;
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    border-radius: 18px;
+    background: var(--surface-3);
+  }
+  .term-tabs a {
+    display: grid;
+    padding: 9px 18px;
+    border-radius: 14px;
+    color: var(--ink-2);
+    font-weight: 600;
+    font-size: 0.92rem;
+    text-decoration: none;
+    white-space: nowrap;
+    transition:
+      background var(--fast),
+      color var(--fast),
+      box-shadow var(--fast);
+  }
+  .term-tabs a small {
+    font-size: 0.72rem;
+    font-weight: 550;
+    color: var(--muted);
+  }
+  .term-tabs a:hover {
+    color: var(--ink);
+  }
+  .term-tabs a[aria-current="page"] {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
+  .stack-lg {
+    display: grid;
+    gap: 34px;
+    min-width: 0;
+  }
+  .filters {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 14px;
+  }
+  .search {
+    position: relative;
+    display: block;
+  }
+  .search .icon {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+  }
+  .search .input {
+    padding-left: 42px;
+  }
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 13px;
+    border: 0;
+    border-radius: 99px;
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition:
+      background var(--fast),
+      color var(--fast),
+      box-shadow var(--fast),
+      transform var(--fast);
+  }
+  .filter-chip:hover {
+    color: var(--ink);
+  }
+  .filter-chip:active {
+    transform: scale(0.96);
+  }
+  .filter-chip[aria-pressed="true"] {
+    background: var(--teal);
+    color: var(--on-teal);
+    box-shadow: none;
+  }
+  .cart-col {
+    display: grid;
+    gap: 16px;
+  }
+  .cart__items {
+    list-style: none;
+    margin: 0 0 12px;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+  }
+  .cart__item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 6px 10px 14px;
+    border-radius: 14px;
+    background: var(--surface-2);
+    box-shadow: inset 3px 0 0 var(--gold);
+    animation: rise var(--slow) var(--ease-spring) both;
+  }
+  .cart__course {
+    flex: 1;
+    display: grid;
+    min-width: 0;
+  }
+  .cart__course small {
+    color: var(--muted);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cart__price {
+    display: grid;
+    text-align: right;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .cart__price small {
+    font-size: 0.72rem;
+    font-weight: 550;
+    color: var(--muted);
+  }
+  .bill {
+    display: grid;
+    gap: 8px;
+    margin: 14px 0 16px;
+    padding: 14px 0 0;
+    border-top: 1px dashed var(--line-strong);
+    font-size: 0.93rem;
+  }
+  .bill div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .bill dt {
+    color: var(--ink-2);
+  }
+  .bill dd {
+    margin: 0;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+  .bill__total {
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    font-size: 1.05rem;
+  }
+  .bill__total dt {
+    color: var(--ink);
+    font-weight: 650;
+  }
+  .bill__total dd {
+    font-size: 1.25rem;
+    font-weight: 750;
+  }
+  .bill__due {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--gold-soft);
+  }
+  .bill__due dt {
+    color: var(--gold-ink);
+    font-weight: 650;
+  }
+  .bill__help dt,
+  .bill__help dd {
+    color: var(--teal-strong);
+  }
+  .pay-option {
+    margin-bottom: 16px;
+  }
+  .pay-option fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+  }
+  .small {
+    font-size: 0.85rem;
+  }
+  .warn-text {
+    margin-top: 10px;
+    color: var(--rust);
+    font-weight: 600;
+  }
+  .pricing {
+    display: grid;
+    gap: 12px;
+    padding: 0 20px 18px;
+  }
+  .block {
+    display: block;
+  }
+  @media (max-width: 1180px) {
+    .catalogue {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

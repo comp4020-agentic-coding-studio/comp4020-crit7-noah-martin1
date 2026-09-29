@@ -1,0 +1,185 @@
+---
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { getFavourites, getVisits } from "../lib/data";
+import { timeAgo } from "../lib/format";
+
+const GUIDES = [
+  { title: "Learning platforms", body: "Canvas, email, student records and timetables — how they fit together.", href: "https://www.anu.edu.au/students/learning-platforms", icon: "grid" },
+  { title: "ANU Student Hubs", body: "Student administration, course advice and specialist services in one place.", href: "https://www.anu.edu.au/students/contacts/anu-student-hubs", icon: "users" },
+  { title: "Student Hub Kambri", body: "The central location for in-person Student Hub services.", href: "https://www.anu.edu.au/students/contacts/student-hub", icon: "pin" },
+  { title: "Navigating ANUHub guide", body: "The official step-by-step PDF guide for ANUHub.", href: "https://services.anu.edu.au/information-technology/software-systems/interactive-student-information-system/navigating-anuhub", icon: "records" },
+  { title: "About ANUHub", body: "What ANUHub (formerly ISIS) does and how to get access.", href: "https://services.anu.edu.au/information-technology/software-systems/anuhub", icon: "info" },
+  { title: "Remote access & Wi-Fi", body: "Logging in on and off campus, and connecting your devices.", href: "https://services.anu.edu.au/information-technology/login-access", icon: "globe" },
+];
+
+// Every item from the old ANUHub navigation drawer, kept and explained.
+const SYSTEM = [
+  { title: "ANUHub", body: "The student self-service home — that's this app.", href: "/", icon: "home", chip: "Home" },
+  { title: "Change Password", body: "Now lives with the rest of your details in Personal Data.", href: "/personal/#password", icon: "key", chip: "Personal Data" },
+  { title: "WHS Incident Notification", body: "Report an injury, hazard or near miss. Now a request type.", href: "/requests/?type=whs#new", icon: "alert", chip: "Requests" },
+  { title: "Enterprise Components", body: "Administrative configuration for staff. Students rarely need it, so it sits here rather than in your main menu.", href: null, icon: "tool", chip: "Staff tool" },
+  { title: "PeopleTools", body: "The underlying system's own admin toolkit. Kept for staff with access; nothing here is needed for study.", href: null, icon: "tool", chip: "Staff tool" },
+];
+
+const visits = getVisits(10);
+const favourites = getFavourites();
+---
+
+<Shell title="Additional Resources" nav="resources" art="hero-resources">
+  <Hero art="hero-resources" eyebrow="Additional Resources" icon="bulb" favourite={{ path: "/resources/", label: "Additional Resources" }}>
+    <h1 id="page-title" slot="title">Help, guides and <em>the whole menu</em></h1>
+    <p class="hero__lede" slot="lede">Official ANU guides, the places to get help in person, and every item from the old ANUHub menu — nothing removed, just put where it makes sense.</p>
+  </Hero>
+
+  <section aria-labelledby="guides-title">
+    <div class="section-head">
+      <h2 id="guides-title">Guides &amp; help</h2>
+      <p>These open ANU's official pages.</p>
+    </div>
+    <div class="grid grid-3">
+      {
+        GUIDES.map((g, i) => (
+          <a class="card guide rise" href={g.href} target="_blank" rel="noopener noreferrer" style={`--i:${i}`}>
+            <span class="tile__top">
+              <span class="card__icon card__icon--plain">
+                <Icon name={g.icon} />
+              </span>
+              <Icon name="external" size={18} class="icon-arrow" />
+            </span>
+            <strong>{g.title}</strong>
+            <span class="muted">{g.body}</span>
+            <span class="sr-only">(opens in a new tab)</span>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="section" id="system" aria-labelledby="system-title">
+    <div class="section-head">
+      <div>
+        <h2 id="system-title">System menu</h2>
+        <p>Everything from the old ANUHub navigation drawer, and where it lives now.</p>
+      </div>
+    </div>
+    <div class="card card--flush">
+      <ul class="system">
+        {
+          SYSTEM.map((s) => (
+            <li>
+              {s.href ? (
+                <a class="sys" href={s.href}>
+                  <span class="card__icon card__icon--plain">
+                    <Icon name={s.icon} />
+                  </span>
+                  <span class="sys__body">
+                    <strong>{s.title}</strong>
+                    <small>{s.body}</small>
+                  </span>
+                  <span class="chip chip--ok">{s.chip}</span>
+                  <Icon name="chevron-right" class="icon-arrow" />
+                </a>
+              ) : (
+                <div class="sys sys--static">
+                  <span class="card__icon card__icon--plain">
+                    <Icon name={s.icon} />
+                  </span>
+                  <span class="sys__body">
+                    <strong>{s.title}</strong>
+                    <small>{s.body}</small>
+                  </span>
+                  <span class="chip">{s.chip}</span>
+                </div>
+              )}
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <div class="grid grid-2 section">
+    <section class="card" aria-labelledby="recent-title">
+      <div class="card__head">
+        <span class="card__icon card__icon--plain"><Icon name="clock" /></span>
+        <h2 id="recent-title">Recently Visited</h2>
+      </div>
+      <ul class="list">
+        {visits.map((v) => <li class="row row--between"><a href={v.path}>{v.label}</a><small class="muted">{timeAgo(v.visitedAt)}</small></li>)}
+      </ul>
+    </section>
+    <section class="card" aria-labelledby="fav-title">
+      <div class="card__head">
+        <span class="card__icon card__icon--rust"><Icon name="heart" /></span>
+        <h2 id="fav-title">Favourites</h2>
+      </div>
+      {
+        favourites.length ? (
+          <ul class="list">
+            {favourites.map((f) => (
+              <li>
+                <a href={f.path}>{f.label}</a>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p class="muted">Tap the heart at the top of any page and it'll appear here and in your sidebar.</p>
+        )
+      }
+    </section>
+  </div>
+</Shell>
+
+<style>
+  .guide {
+    display: grid;
+    gap: 8px;
+    align-content: start;
+  }
+  .guide .muted {
+    font-size: 0.9rem;
+  }
+  .guide:hover :global(.icon-arrow) {
+    color: var(--teal);
+    transform: translate(2px, -2px);
+  }
+  .system {
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+  }
+  .system li + li {
+    border-top: 1px solid var(--line);
+  }
+  .sys {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px;
+    border-radius: 14px;
+    color: inherit;
+    text-decoration: none;
+    transition: background var(--fast);
+  }
+  a.sys:hover {
+    background: var(--hover);
+  }
+  a.sys:hover :global(.icon-arrow) {
+    transform: translateX(3px);
+    color: var(--teal);
+  }
+  .sys__body {
+    flex: 1;
+    display: grid;
+  }
+  .sys__body small {
+    color: var(--muted);
+    font-size: 0.86rem;
+  }
+  :global(.icon-arrow) {
+    color: var(--muted);
+    transition: transform var(--med) var(--ease-spring);
+  }
+</style>

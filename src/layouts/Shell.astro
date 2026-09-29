@@ -1,0 +1,383 @@
+---
+import Icon from "../components/Icon.astro";
+import { getCourses, getFavourites, getInbox, getStudent, getVisits, recordVisit, unreadCount, upcomingEvents, getCharges } from "../lib/data";
+import { formatAUD, formatDate, initials, relativeDay, timeAgo, todayISO } from "../lib/format";
+import { NAV, NAV_ITEMS, SHORTCUTS, type NavKey } from "../lib/nav";
+import "../styles/app.css";
+
+interface Props {
+  title: string;
+  nav: NavKey;
+  description?: string;
+  art?: string;
+}
+
+const { title, nav, description = "ANU Hub — enrolment, timetables, fees, results and your degree in one place.", art } = Astro.props;
+
+const student = getStudent();
+const unread = unreadCount();
+const favourites = getFavourites();
+const previous = getVisits(20);
+const lastSeen = previous[0]?.visitedAt;
+if (Astro.request.method === "GET") recordVisit(Astro.url.pathname + Astro.url.search, title);
+const recents = previous.filter((v) => v.path !== Astro.url.pathname + Astro.url.search).slice(0, 5);
+
+const today = todayISO();
+const inbox = getInbox().filter((m) => !m.read && !m.archived).slice(0, 3);
+const soon = upcomingEvents(today, 3);
+const unpaid = getCharges().filter((c) => c.status === "unpaid");
+const bellCount = unread + unpaid.length;
+
+const current = NAV_ITEMS.find((i) => i.key === nav);
+const group = NAV.find((g) => g.items.some((i) => i.key === nav));
+const courses = getCourses();
+const name = `${student.preferredName} ${student.legalFamily}`;
+const path = Astro.url.pathname;
+const back = Astro.url.pathname + Astro.url.search;
+
+const TAB_KEYS: NavKey[] = ["home", "enrolment", "timetable", "degree"];
+const TAB_LABEL: Partial<Record<NavKey, string>> = { home: "Home", enrolment: "Enrol", timetable: "Timetable", degree: "Degree" };
+---
+
+<!doctype html>
+<html lang="en-AU" data-theme={student.theme} data-motion={student.motion} data-text={student.textSize}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title} · ANU Hub</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#f5f0e4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#12100d" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500..700;1,9..144,500..700&family=Public+Sans:wght@400..700&display=swap"
+    />
+    {art && <link rel="preload" as="image" href={`/art/${art}.webp`} fetchpriority="high" />}
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="app">
+      <nav class="sidebar" id="sidebar" aria-label="ANU Hub">
+        <a class="brand" href="/">
+          <span class="brand__mark"><Icon name="leaf" size={20} /></span>
+          <span class="brand__name"><strong>ANU Hub</strong><span>Student administration</span></span>
+        </a>
+        {
+          NAV.map((g) => (
+            <div class="nav-group">
+              {g.label && <p class="nav-group__label">{g.label}</p>}
+              <ul class="nav-list">
+                {g.items.map((item) => (
+                  <li>
+                    <a class="nav-link" href={item.href} aria-current={item.key === nav ? "page" : undefined}>
+                      {item.key === nav && <span class="nav-pill" />}
+                      <Icon name={item.icon} />
+                      <span>{item.label}</span>
+                      {item.key === "messages" && unread > 0 && (
+                        <span class="badge" aria-label={`${unread} unread`}>
+                          {unread}
+                        </span>
+                      )}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
+        }
+        {
+          favourites.length > 0 && (
+            <div class="nav-group pins">
+              <p class="nav-group__label">Favourites</p>
+              <ul class="nav-list">
+                {favourites.map((f) => (
+                  <li>
+                    <a class="nav-link" href={f.path}>
+                      <Icon name="heart" size={17} />
+                      <span>{f.label}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        }
+        <a class="me-card" href="/personal/">
+          <span class="avatar" aria-hidden="true">{initials(name)}</span>
+          <span>
+            <strong>{name}</strong>
+            <small>{student.uid} · {student.programCode}</small>
+          </span>
+        </a>
+      </nav>
+      <div class="scrim" data-nav-close></div>
+
+      <div class="main-col">
+        <header class="topbar" id="topbar">
+          <button class="icon-btn menu-btn" type="button" data-nav-toggle aria-controls="sidebar" aria-expanded="false" aria-label="Open menu">
+            <Icon name="menu" />
+          </button>
+          <div class="crumbs">
+            {
+              group?.label ? (
+                <>
+                  <span>{group.label}</span>
+                  <Icon name="chevron-right" size={16} />
+                </>
+              ) : null
+            }
+            <strong>{current?.label ?? title}</strong>
+          </div>
+          <div class="topbar__spacer"></div>
+          <button class="search-trigger" type="button" data-palette-open aria-haspopup="dialog" aria-label="Search ANU Hub">
+            <Icon name="search" size={18} />
+            <span>Search courses, pages, actions…</span>
+            <kbd>⌘K</kbd>
+          </button>
+          <button class="icon-btn" type="button" popovertarget="notifications" aria-label={bellCount ? `Notifications: ${bellCount} new` : "Notifications"}>
+            <Icon name="bell" />
+            {bellCount > 0 && <span class="dot" aria-hidden="true">{bellCount}</span>}
+          </button>
+          <button class="icon-btn" type="button" popovertarget="display" aria-label="Display and accessibility">
+            <Icon name="access" />
+          </button>
+
+          <div id="notifications" class="panel" popover>
+            <div class="panel__head">
+              <p>Notifications</p>
+              <a class="link-arrow" href="/messages/">Inbox <Icon name="arrow-right" size={16} /></a>
+            </div>
+            <div class="panel__section">
+              <p class="panel__label">Unread messages</p>
+              {
+                inbox.length ? (
+                  inbox.map((m) => (
+                    <a class="panel-item" href={`/messages/?id=${m.id}`} data-astro-prefetch="false">
+                      <span class="panel-item__icon">
+                        <Icon name="mail" size={18} />
+                      </span>
+                      <span>
+                        {m.subject}
+                        <small>
+                          {m.sender} · {timeAgo(m.sentAt)}
+                        </small>
+                      </span>
+                    </a>
+                  ))
+                ) : (
+                  <p class="panel-item muted">You're all caught up.</p>
+                )
+              }
+            </div>
+            {
+              unpaid.length > 0 && (
+                <div class="panel__section">
+                  <p class="panel__label">Charges to pay</p>
+                  {unpaid.map((c) => (
+                    <a class="panel-item" href="/account/#charges">
+                      <span class="panel-item__icon">
+                        <Icon name="wallet" size={18} />
+                      </span>
+                      <span>
+                        {formatAUD(c.amountCents)} · {c.description}
+                        <small>Due {formatDate(c.dueDate)}</small>
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              )
+            }
+            <div class="panel__section">
+              <p class="panel__label">Coming up</p>
+              {
+                soon.map((e) => (
+                  <a class="panel-item" href="/#upcoming">
+                    <span class="panel-item__icon">
+                      <Icon name="calendar" size={18} />
+                    </span>
+                    <span>
+                      {e.title}
+                      <small>
+                        {relativeDay(e.date, today)} · {formatDate(e.date, { weekday: "short", day: "numeric", month: "short" })}
+                      </small>
+                    </span>
+                  </a>
+                ))
+              }
+            </div>
+          </div>
+
+          <div id="display" class="panel" popover>
+            <div class="panel__head">
+              <p>Display &amp; accessibility</p>
+            </div>
+            <form class="panel__section stack" method="post" action="/api/preferences" data-prefs>
+              <input type="hidden" name="back" value={back} />
+              <fieldset class="stack" style="border:0;margin:0;padding:0 8px">
+                <legend class="panel__label" style="padding:0 2px 6px">Theme</legend>
+                <div class="seg">
+                  {
+                    (
+                      [
+                        ["system", "Auto", "monitor"],
+                        ["light", "Light", "sun"],
+                        ["dark", "Dark", "moon"],
+                      ] as const
+                    ).map(([value, label, icon]) => (
+                      <label>
+                        <input type="radio" name="theme" value={value} checked={student.theme === value} data-autosubmit />
+                        <Icon name={icon} size={16} />
+                        {label}
+                      </label>
+                    ))
+                  }
+                </div>
+              </fieldset>
+              <fieldset class="stack" style="border:0;margin:0;padding:0 8px">
+                <legend class="panel__label" style="padding:0 2px 6px">Motion</legend>
+                <div class="seg">
+                  <label><input type="radio" name="motion" value="full" checked={student.motion === "full"} data-autosubmit />Smooth</label>
+                  <label><input type="radio" name="motion" value="reduced" checked={student.motion === "reduced"} data-autosubmit />Reduced</label>
+                </div>
+              </fieldset>
+              <fieldset class="stack" style="border:0;margin:0;padding:0 8px">
+                <legend class="panel__label" style="padding:0 2px 6px">Text size</legend>
+                <div class="seg">
+                  <label><input type="radio" name="textSize" value="standard" checked={student.textSize === "standard"} data-autosubmit />Standard</label>
+                  <label><input type="radio" name="textSize" value="large" checked={student.textSize === "large"} data-autosubmit />Large</label>
+                </div>
+              </fieldset>
+              <noscript><button class="btn btn--sm">Apply</button></noscript>
+            </form>
+          </div>
+
+          <dialog class="palette" id="palette" aria-label="Search ANU Hub">
+            <div class="palette__field">
+              <Icon name="search" />
+              <input
+                id="palette-input"
+                type="search"
+                role="combobox"
+                aria-expanded="true"
+                aria-controls="palette-list"
+                aria-autocomplete="list"
+                aria-label="Search pages, courses and actions"
+                placeholder="Search pages, courses, actions…"
+                autocomplete="off"
+              />
+              <kbd>esc</kbd>
+            </div>
+            <div class="palette__results" role="listbox" id="palette-list" aria-label="Results">
+              {
+                recents.length > 0 && (
+                  <div role="group" aria-labelledby="pg-recent" data-group="recent">
+                    <div class="palette__group" id="pg-recent" role="presentation">
+                      Recently visited
+                    </div>
+                    {recents.map((v, i) => (
+                      <a class="palette__item" role="option" aria-selected="false" id={`po-r${i}`} href={v.path} data-text={v.label}>
+                        <Icon name="clock" size={18} />
+                        <span>{v.label}</span>
+                        <small>{timeAgo(v.visitedAt)}</small>
+                      </a>
+                    ))}
+                  </div>
+                )
+              }
+              <div role="group" aria-labelledby="pg-pages" data-group="pages">
+                <div class="palette__group" id="pg-pages" role="presentation">Pages</div>
+                {
+                  NAV_ITEMS.map((item) => (
+                    <a class="palette__item" role="option" aria-selected="false" id={`po-${item.key}`} href={item.href} data-text={`${item.label} ${item.legacy.join(" ")} ${item.blurb}`}>
+                      <Icon name={item.icon} size={18} />
+                      <span>{item.label}</span>
+                      <small>{item.legacy.filter((l) => l !== item.label)[0] ?? ""}</small>
+                    </a>
+                  ))
+                }
+              </div>
+              <div role="group" aria-labelledby="pg-short" data-group="shortcuts">
+                <div class="palette__group" id="pg-short" role="presentation">Jump to</div>
+                {
+                  SHORTCUTS.map((s, i) => (
+                    <a class="palette__item" role="option" aria-selected="false" id={`po-s${i}`} href={s.href} data-text={`${s.label} ${s.hint}`}>
+                      <Icon name={s.icon} size={18} />
+                      <span>{s.label}</span>
+                      <small>{s.hint}</small>
+                    </a>
+                  ))
+                }
+              </div>
+              <div role="group" aria-labelledby="pg-courses" data-group="courses" data-search-only>
+                <div class="palette__group" id="pg-courses" role="presentation">Courses</div>
+                {
+                  courses.map((c) => (
+                    <a class="palette__item" role="option" aria-selected="false" id={`po-${c.code}`} href={`/enrolment/?q=${c.code}#catalogue`} data-text={`${c.code} ${c.title} ${c.area}`}>
+                      <span class="chip">{c.code}</span>
+                      <span>{c.title}</span>
+                      <small>{c.units} units</small>
+                    </a>
+                  ))
+                }
+              </div>
+              <p class="palette__empty" hidden>No matches — try a course code like COMP3620.</p>
+            </div>
+            <div class="palette__foot" aria-hidden="true">
+              <span><kbd>↑</kbd> <kbd>↓</kbd> move</span>
+              <span><kbd>↵</kbd> open</span>
+              <span><kbd>/</kbd> or <kbd>⌘K</kbd> anywhere</span>
+            </div>
+          </dialog>
+
+          <dialog class="confirm" id="confirm" aria-labelledby="confirm-title">
+            <h2 id="confirm-title">Are you sure?</h2>
+            <p id="confirm-body"></p>
+            <div class="confirm__actions">
+              <button class="btn btn--ghost" type="button" value="cancel" data-confirm-cancel>Cancel</button>
+              <button class="btn btn--danger" type="button" value="ok" data-confirm-ok>Confirm</button>
+            </div>
+          </dialog>
+        </header>
+
+        <main id="main" tabindex="-1">
+          <slot />
+        </main>
+
+        <footer class="site-footer">
+          <span>ANU Hub redesign · a COMP4020 prototype with sample data, not an official ANU system.</span>
+          <span>
+            {lastSeen ? <>Last logged in {timeAgo(lastSeen)} · </> : null}
+            <a href="/readme/">About this redesign</a> · <a href="/resources/#system">System menu</a>
+          </span>
+        </footer>
+      </div>
+    </div>
+
+    <nav class="tabbar" aria-label="Quick links">
+      {
+        TAB_KEYS.map((key) => {
+          const item = NAV_ITEMS.find((i) => i.key === key)!;
+          return (
+            <a href={item.href} aria-current={key === nav ? "page" : undefined}>
+              <Icon name={item.icon} size={21} />
+              {TAB_LABEL[key]}
+            </a>
+          );
+        })
+      }
+      <button type="button" data-nav-toggle aria-controls="sidebar" aria-expanded="false">
+        <Icon name="grid" size={21} />
+        More
+      </button>
+    </nav>
+
+    <section class="toasts" id="toasts" aria-label="Status messages" aria-live="polite"></section>
+
+    <script>
+      import "../scripts/app.ts";
+    </script>
+  </body>
+</html>

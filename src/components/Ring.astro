@@ -1,0 +1,43 @@
+---
+import { pct } from "../lib/rules";
+
+interface Props {
+  completed: number;
+  enrolled: number;
+  planned?: number;
+  total: number;
+  size?: number;
+  label: string;
+}
+const { completed, enrolled, planned = 0, total, size = 72, label } = Astro.props;
+const a = Math.min(100, pct(completed, total));
+const b = Math.min(100 - a, pct(enrolled, total));
+const c = Math.min(100 - a - b, pct(planned, total));
+const shown = Math.round(a + b);
+---
+
+<div class="ring-wrap" style={`width:${size}px;height:${size}px`} role="img" aria-label={`${label}: ${completed} of ${total} units done, ${enrolled} in progress${planned ? `, ${planned} planned` : ""}`}>
+  <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+    <circle class="ring__track" r="52" cx="60" cy="60" pathLength="100"></circle>
+    {a > 0 && <circle class="ring__done" r="52" cx="60" cy="60" pathLength="100" style={`--p:${a}`} />}
+    {b > 0 && <circle class="ring__now" r="52" cx="60" cy="60" pathLength="100" style={`--p:${b};--o:${a}`} />}
+    {c > 0 && <circle class="ring__plan" r="52" cx="60" cy="60" pathLength="100" style={`--p:${c};--o:${a + b}`} />}
+  </svg>
+  <span class="ring-label" aria-hidden="true">{shown >= 100 ? "✓" : `${shown}%`}</span>
+</div>
+
+<style>
+  .ring-wrap {
+    position: relative;
+    flex: none;
+  }
+  .ring-label {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 0.86rem;
+    font-variant-numeric: tabular-nums;
+  }
+</style>

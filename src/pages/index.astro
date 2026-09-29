@@ -1,53 +1,517 @@
 ---
-import { listMessages } from "../lib/db";
-import "../styles.css";
+import DegreeBar from "../components/DegreeBar.astro";
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { CURRENT_TERM, PLANNING_TERM, TERMS } from "../lib/catalog";
+import { allocationsFor, getAnnouncements, getFavourites, getVisits, slotsFor, unreadCount, upcomingEvents } from "../lib/data";
+import { DAYS, formatAUD, formatDate, formatTime, greeting, relativeDay, weekdayIndex, minutesNow } from "../lib/format";
+import { loadHub } from "../lib/hub";
+import { NAV } from "../lib/nav";
+import { pct, termCost } from "../lib/rules";
 
-const messages = listMessages();
+const hub = loadHub();
+const { student, progress, unpaid, tasks, rows, today } = hub;
+const unread = unreadCount();
+const announcements = getAnnouncements();
+const events = upcomingEvents(today, 7);
+
+const done = pct(progress.completed, progress.total);
+const withNow = pct(progress.completed + progress.enrolled, progress.total);
+const toGo = progress.total - progress.completed - progress.enrolled;
+const semestersLeft = Math.ceil((toGo / 24) * 2) / 2;
+const toGoText = semestersLeft > 1 ? `about ${semestersLeft} semesters` : "one semester";
+
+const enrolledNow = rows.filter((r) => r.term === CURRENT_TERM && r.status === "enrolled");
+const alloc = new Set(allocationsFor(CURRENT_TERM).map((a) => a.slotId));
+const mySlots = slotsFor(CURRENT_TERM, enrolledNow.map((r) => r.courseCode)).filter((s) => alloc.has(s.id));
+const dow = weekdayIndex();
+const nowMins = minutesNow();
+const classDay = dow >= 1 && dow <= 5 && mySlots.some((s) => s.day === dow) ? dow : [1, 2, 3, 4, 5].find((d) => d > dow && mySlots.some((s) => s.day === d)) ?? 1;
+const todays = mySlots.filter((s) => s.day === classDay).sort((a, b) => a.start.localeCompare(b.start));
+const titleOf = (code: string) => rows.find((r) => r.courseCode === code)?.course.title ?? code;
+
+const unpaidTotal = unpaid.reduce((s, c) => s + c.amountCents, 0);
+const nextDue = [...unpaid].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
+const plan = termCost(rows, PLANNING_TERM, student);
+const payNote = student.paymentOption === "help" ? `${formatAUD(plan.dueNowCents)} due by census, rest to HECS-HELP` : "paid upfront by census";
+const planNote = plan.items.length ? `${plan.items.length} planned course${plan.items.length > 1 ? "s" : ""} · ${payNote}` : "Add courses to see the exact cost before you commit.";
+const helpThisYear = hub.charges.filter((c) => c.status === "deferred" && c.term.startsWith("2026")).reduce((s, c) => s + c.amountCents, 0);
+
+const recents = getVisits(8).filter((v) => v.path !== "/").slice(0, 5);
+const favourites = getFavourites();
+const nextEvent = events[0];
+const nextEventTitle = nextEvent?.title.split(" — ")[0] ?? "";
+
+const KIND: Record<string, { label: string; tone: string; icon: string }> = {
+  deadline: { label: "Deadline", tone: "chip--warn", icon: "flag" },
+  academic: { label: "Academic", tone: "chip--info", icon: "records" },
+  exam: { label: "Exam", tone: "chip--block", icon: "alert" },
+  event: { label: "Event", tone: "chip--ok", icon: "sparkles" },
+  ceremony: { label: "Ceremony", tone: "chip--gold", icon: "cap" },
+  fees: { label: "Fees", tone: "chip--warn", icon: "wallet" },
+};
+
+const STATUS: Record<string, string> = {
+  enrolment: plan.items.length ? `${plan.items.length} in your ${TERMS[PLANNING_TERM].short} cart` : `${TERMS[PLANNING_TERM].short} enrolment is open`,
+  timetable: hub.missing.length ? `${hub.missing.length} class${hub.missing.length > 1 ? "es" : ""} to allocate` : "All classes allocated",
+  degree: `${Math.round(withNow)}% complete`,
+  records: `GPA ${hub.gpa.toFixed(2)} · WAM ${hub.wam.toFixed(1)}`,
+  graduation: student.graduationCeremony ? `Registered: ${student.graduationCeremony}` : "Expected December 2027",
+  account: unpaid.length ? `${formatAUD(unpaidTotal)} to pay` : "Nothing to pay",
+  messages: unread ? `${unread} unread` : "All caught up",
+  personal: "Contacts, addresses, password",
+  requests: "Special consideration, WHS & more",
+  resources: "Guides, help & system menu",
+};
+const LEGACY_TILES: Record<string, string> = { enrolment: "Enrolment", timetable: "Allocate to Your Class", degree: "Manage my Degree", records: "Academic Records", requests: "Requests", account: "Charges to Pay · Account Details", personal: "Personal Data", resources: "Additional Resources", graduation: "Graduation", messages: "Student Messages" };
 ---
 
-<!doctype html>
-<html lang="en-AU">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>COMP4020 prototype</title>
-  </head>
-  <body>
-    <nav aria-label="site">
-      <a href="/">Guestbook</a>
-      <a href="/readme/">About</a>
-    </nav>
-    <main>
-      <h1>Guestbook</h1>
-      <p>
-        A minimal full-stack starter: messages live in SQLite on the machine's
-        volume (state survives a reload and a redeploy), and new messages
-        appear in every open tab over a server-sent-events stream — open this
-        page twice and sign it in one. Replace all of this with your own
-        prototype.
+<Shell title="Home" nav="home" art="hero-home">
+  <Hero art="hero-home" eyebrow="Student Homepage" icon="home">
+    <h1 id="page-title" slot="title">{greeting()}, <em>{student.preferredName}</em>.</h1>
+    <p class="hero__lede" slot="lede">
+      {formatDate(today, { weekday: "long", day: "numeric", month: "long" })} · {TERMS[CURRENT_TERM].label}. You're {Math.round(done)}% of the way to your {student.programName}
+      {tasks.length ? ` — ${tasks.length} thing${tasks.length > 1 ? "s" : ""} could use you today.` : " — nothing needs you today."}
+    </p>
+    <div class="hero__stats">
+      <a class="stat-pill" href="/degree/"><small>Degree complete</small><strong><span class="count" style={`--to:${Math.round(done)}`} aria-hidden="true"></span><span aria-hidden="true">%</span><span class="sr-only">{Math.round(done)}%</span></strong></a>
+      <a class="stat-pill" href="/account/#charges"><small>Charges to pay</small><strong>{formatAUD(unpaidTotal)}</strong></a>
+      <a class="stat-pill" href="/messages/"><small>Unread messages</small><strong>{unread}</strong></a>
+      {nextEvent && <a class="stat-pill" href="#upcoming"><small>{relativeDay(nextEvent.date, today)}</small><strong class="pill-trunc">{nextEventTitle}</strong></a>}
+    </div>
+  </Hero>
+
+  <section class="card progress-card rise" style="--i:1" aria-labelledby="progress-title">
+    <div class="progress-card__body">
+      <p class="kicker"><Icon name="sparkles" size={16} /> Your degree</p>
+      <h2 id="progress-title">
+        {progress.completed} of {progress.total} units done — {toGoText} to go.
+      </h2>
+      <p class="muted">
+        {student.programName} · {student.majorName} major. With this semester’s {progress.enrolled} units you’ll be at <strong>{Math.round(withNow)}%</strong>.
       </p>
-      <form method="post" action="/api/messages">
-        <label for="body">Leave a message</label>
-        <input id="body" name="body" required maxlength="500" />
-        <button>Sign</button>
-      </form>
-      <ul id="messages">
-        {messages.map((message) => <li>{message.body}</li>)}
-      </ul>
-    </main>
-    <script>
-      // The live half of the demo: subscribe to the SSE stream and prepend
-      // messages as they arrive. The form itself needs none of this — its
-      // POST + redirect re-renders the submitting tab from SQLite; this
-      // stream is how every other tab finds out.
-      const list = document.querySelector("#messages");
-      const source = new EventSource("/api/events");
-      source.addEventListener("message", (event) => {
-        const message = JSON.parse(event.data);
-        const item = document.createElement("li");
-        item.textContent = message.body;
-        list?.prepend(item);
-      });
-    </script>
-  </body>
-</html>
+      <DegreeBar completed={progress.completed} enrolled={progress.enrolled} planned={progress.planned} total={progress.total} size="lg" marks label="Degree progress" />
+      <div class="legend">
+        <span><i class="l-done"></i>Completed {progress.completed}</span>
+        <span><i class="l-now"></i>In progress {progress.enrolled}</span>
+        {progress.planned > 0 && <span><i class="l-plan"></i>Planned {progress.planned}</span>}
+        <span><i class="l-left"></i>Still to plan {progress.remaining}</span>
+      </div>
+      <div class="row row--wrap">
+        <a class="btn" href="/degree/">See what's left <Icon name="arrow-right" size={16} /></a>
+        <a class="btn btn--ghost" href="/enrolment/">Plan {TERMS[PLANNING_TERM].short}</a>
+      </div>
+    </div>
+    <img class="progress-card__art" src="/art/spot-cap.webp" alt="" width="720" height="720" loading="lazy" decoding="async" />
+  </section>
+
+  <section class="section" id="attention" aria-labelledby="attention-title">
+    <div class="section-head">
+      <h2 id="attention-title">Needs your attention</h2>
+    </div>
+    <div class="grid grid-2">
+      <div class="card rise" style="--i:2">
+        <div class="card__head">
+          <span class="card__icon card__icon--rust"><Icon name="megaphone" /></span>
+          <h3>Announcements</h3>
+        </div>
+        <ul class="list">
+          {
+            announcements.map((a) => (
+              <li class="announce">
+                <span class:list={["chip", a.level === "alert" ? "chip--block" : "chip--info"]}>{a.level === "alert" ? "Important" : "Update"}</span>
+                <div>
+                  <strong>{a.title}</strong>
+                  <p class="muted">{a.body}</p>
+                </div>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+      <div class="card rise" style="--i:3">
+        <div class="card__head">
+          <span class="card__icon"><Icon name="tasks" /></span>
+          <h3>Tasks</h3>
+          <span class="badge badge--soft">{tasks.length}</span>
+        </div>
+        {
+          tasks.length ? (
+            <ul class="list tasks">
+              {tasks.map((t) => (
+                <li>
+                  <a href={t.href} class="task">
+                    <span class:list={["task__dot", t.tone === "urgent" && "task__dot--urgent"]} aria-hidden="true" />
+                    <span>
+                      <strong>{t.title}</strong>
+                      <small>{t.detail}</small>
+                    </span>
+                  </a>
+                  <form method="post" action="/api/tasks">
+                    <input type="hidden" name="key" value={t.key} />
+                    <input type="hidden" name="back" value="/#attention" />
+                    <button class="icon-btn" type="submit" aria-label={`Mark “${t.title}” as done`}>
+                      <Icon name="check" size={18} />
+                    </button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div class="empty">
+              <img src="/art/spot-sprig.webp" alt="" width="120" height="120" loading="lazy" />
+              <p>No current tasks. Enjoy the quiet.</p>
+            </div>
+          )
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="week-title">
+    <div class="section-head">
+      <h2 id="week-title">Your week</h2>
+      <a class="link-arrow" href="/timetable/">Full timetable <Icon name="arrow-right" size={16} /></a>
+    </div>
+    <div class="grid week-grid">
+      <div class="card rise" style="--i:4">
+        <div class="card__head">
+          <span class="card__icon card__icon--gold"><Icon name="clock" /></span>
+          <h3>{classDay === dow ? "Today’s classes" : `${DAYS[classDay]}’s classes`}</h3>
+        </div>
+        {
+          todays.length ? (
+            <ol class="classes">
+              {todays.map((s) => {
+                const live = classDay === dow && nowMins >= Number(s.start.slice(0, 2)) * 60 && nowMins < Number(s.end.slice(0, 2)) * 60;
+                return (
+                  <li class:list={["class", live && "class--live"]}>
+                    <span class="class__time">
+                      {formatTime(s.start)}
+                      <small>{formatTime(s.end)}</small>
+                    </span>
+                    <span class="class__body">
+                      <strong>
+                        {s.courseCode} · {s.activity}
+                      </strong>
+                      <small>{titleOf(s.courseCode)}</small>
+                      <small class="row">
+                        <Icon name="pin" size={14} />
+                        {s.location}
+                      </small>
+                    </span>
+                    {live && <span class="chip chip--ok">Now</span>}
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p class="muted">No classes — a good day for the library.</p>
+          )
+        }
+      </div>
+      <div class="card rise" style="--i:5" id="upcoming">
+        <div class="card__head">
+          <span class="card__icon"><Icon name="calendar" /></span>
+          <h3>Coming up for you</h3>
+        </div>
+        <ul class="list">
+          {
+            events.map((e) => (
+              <li class="event">
+                <span class="date-badge">
+                  <small>{formatDate(e.date, { month: "short" })}</small>
+                  <strong>{formatDate(e.date, { day: "numeric" })}</strong>
+                </span>
+                <span class="event__body">
+                  <strong>{e.title}</strong>
+                  <small>
+                    {relativeDay(e.date, today)}
+                    {e.location && ` · ${e.location}`}
+                    {e.description && ` · ${e.description}`}
+                  </small>
+                </span>
+                <span class={`chip ${KIND[e.kind].tone}`}>{KIND[e.kind].label}</span>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="money-title">
+    <div class="section-head">
+      <h2 id="money-title">Money, made clear</h2>
+      <a class="link-arrow" href="/account/">Account Details <Icon name="arrow-right" size={16} /></a>
+    </div>
+    <div class="grid grid-3">
+      <a class="card money rise" style="--i:6" href="/account/#charges">
+        <small>Charges to pay</small>
+        <strong>{formatAUD(unpaidTotal)}</strong>
+        <span class="muted">{nextDue ? `Next due ${formatDate(nextDue.dueDate)} (${relativeDay(nextDue.dueDate, today).toLowerCase()})` : "You're all paid up."}</span>
+      </a>
+      <a class="card money rise" style="--i:7" href="/enrolment/#cart">
+        <small>{TERMS[PLANNING_TERM].short} estimate</small>
+        <strong>{formatAUD(plan.tuitionCents + plan.ssafCents)}</strong>
+        <span class="muted">{planNote}</span>
+      </a>
+      <a class="card money rise" style="--i:8" href="/account/#fees">
+        <small>Deferred to HECS-HELP in 2026</small>
+        <strong>{formatAUD(helpThisYear)}</strong>
+        <span class="muted">Every course, its band and its price — broken down.</span>
+      </a>
+    </div>
+  </section>
+
+  <section class="section" id="everything" aria-labelledby="everything-title">
+    <div class="section-head">
+      <h2 id="everything-title">Everything in ANU Hub</h2>
+      <p>Grouped by what you're trying to do.</p>
+    </div>
+    <div class="grid grid-auto tiles">
+      {
+        NAV.filter((g) => g.label).flatMap((g) => g.items.map((item) => ({ item, group: g.label }))).map(({ item, group }, i) => (
+          <a class="card tile rise" href={item.href} style={`--i:${i}`}>
+            <span class="tile__top">
+              <span class="card__icon card__icon--plain">
+                <Icon name={item.icon} />
+              </span>
+              <span class="tile__group">{group}</span>
+              <Icon name="arrow-right" class="icon-arrow" />
+            </span>
+            <strong class="tile__name">{LEGACY_TILES[item.key] ?? item.label}</strong>
+            <p>{item.blurb}</p>
+            <span class="tile__status">{STATUS[item.key]}</span>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="section grid grid-2" aria-label="Recently Visited and Favourites">
+    <div class="card card--tint">
+      <div class="card__head">
+        <span class="card__icon card__icon--plain"><Icon name="clock" /></span>
+        <h2 class="h3">Recently Visited</h2>
+      </div>
+      {recents.length ? <div class="row row--wrap">{recents.map((v) => <a class="btn btn--ghost btn--sm" href={v.path}>{v.label}</a>)}</div> : <p class="muted">Pages you open show up here.</p>}
+    </div>
+    <div class="card card--tint">
+      <div class="card__head">
+        <span class="card__icon card__icon--rust"><Icon name="heart" /></span>
+        <h2 class="h3">Favourites</h2>
+      </div>
+      {favourites.length ? <div class="row row--wrap">{favourites.map((f) => <a class="btn btn--ghost btn--sm" href={f.path}><Icon name="heart" size={15} />{f.label}</a>)}</div> : <p class="muted">Tap the heart on any page to pin it to your sidebar.</p>}
+    </div>
+  </section>
+</Shell>
+
+<style>
+  .pill-trunc {
+    display: block;
+    max-width: 220px;
+    font-size: 1rem !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .progress-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px;
+    gap: 16px;
+    align-items: center;
+    overflow: hidden;
+    padding: 28px;
+    background: radial-gradient(90% 140% at 100% 50%, var(--gold-soft), transparent 60%), var(--surface);
+  }
+  .progress-card__body {
+    display: grid;
+    gap: 14px;
+  }
+  .progress-card h2 {
+    font-family: var(--font-display);
+    font-size: clamp(1.4rem, 2.4vw, 1.9rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .progress-card__art {
+    width: 220px;
+    height: 220px;
+    object-fit: contain;
+    animation: float 7s ease-in-out infinite alternate;
+  }
+  @keyframes float {
+    to {
+      transform: translateY(-8px) rotate(2deg);
+    }
+  }
+  .kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gold-ink);
+  }
+  .h3 {
+    font-size: 1.05rem;
+  }
+  .announce {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .announce p {
+    font-size: 0.88rem;
+    margin-top: 2px;
+  }
+  .tasks li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+  }
+  .task {
+    flex: 1;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 10px;
+    margin-left: -10px;
+    border-radius: 12px;
+    color: inherit;
+    text-decoration: none;
+    transition: background var(--fast);
+  }
+  .task:hover {
+    background: var(--hover);
+  }
+  .task small {
+    display: block;
+    color: var(--muted);
+    font-size: 0.84rem;
+  }
+  .task__dot {
+    width: 10px;
+    height: 10px;
+    margin-top: 7px;
+    border-radius: 50%;
+    background: var(--teal);
+    box-shadow: 0 0 0 4px var(--teal-soft);
+    flex: none;
+  }
+  .task__dot--urgent {
+    background: var(--rust);
+    box-shadow: 0 0 0 4px var(--rust-soft);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    50% {
+      box-shadow: 0 0 0 7px transparent;
+    }
+  }
+  .week-grid {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    align-items: start;
+  }
+  .classes {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+  .class {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--surface-2);
+    box-shadow: inset 3px 0 0 var(--gold);
+  }
+  .class--live {
+    background: var(--teal-soft);
+    box-shadow: inset 3px 0 0 var(--teal);
+  }
+  .class__time {
+    display: grid;
+    min-width: 54px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .class__time small,
+  .class__body small {
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 0.82rem;
+  }
+  .class__body {
+    display: grid;
+    gap: 1px;
+    flex: 1;
+  }
+  .event {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .event__body {
+    flex: 1;
+    display: grid;
+    min-width: 0;
+  }
+  .event__body small {
+    color: var(--muted);
+    font-size: 0.83rem;
+  }
+  .money {
+    display: grid;
+    gap: 4px;
+  }
+  .money small {
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 0.84rem;
+  }
+  .money strong {
+    font-size: 1.9rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .money .muted {
+    font-size: 0.88rem;
+  }
+  .tiles {
+    grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  }
+  .tile__group {
+    margin: 0 auto 0 12px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .tile__name {
+    font-size: 1.05rem;
+  }
+  @media (max-width: 1020px) {
+    .week-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  @media (max-width: 720px) {
+    .progress-card {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .progress-card__art {
+      display: none;
+    }
+  }
+</style>

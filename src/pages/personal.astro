@@ -1,0 +1,270 @@
+---
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { getStudent, updateStudent } from "../lib/data";
+import { formatDate, timeAgo } from "../lib/format";
+import { done, field } from "../lib/http";
+
+const nowSql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const intent = field(form, "intent", 20);
+  if (intent === "names") {
+    const preferredName = field(form, "preferredName", 40);
+    if (!preferredName) return done("/personal/#names", { ok: false, message: "Your preferred name can't be empty." });
+    updateStudent({ preferredName, pronouns: field(form, "pronouns", 30) });
+    return done("/personal/#names", { ok: true, message: `Nice to meet you, ${preferredName}` });
+  }
+  if (intent === "contact") {
+    const personalEmail = field(form, "personalEmail", 120);
+    const phone = field(form, "phone", 20);
+    if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(personalEmail)) return done("/personal/#contact", { ok: false, message: "That email address doesn't look right." });
+    if (phone && !/^[+\d][\d\s()-]{7,}$/.test(phone)) return done("/personal/#contact", { ok: false, message: "That phone number doesn't look right." });
+    updateStudent({ personalEmail, phone });
+    return done("/personal/#contact", { ok: true, message: "Contact details saved" });
+  }
+  if (intent === "address") {
+    updateStudent({ homeAddress: field(form, "homeAddress", 160), termAddress: field(form, "termAddress", 160) });
+    return done("/personal/#address", { ok: true, message: "Addresses saved" });
+  }
+  if (intent === "emergency") {
+    const emergencyName = field(form, "emergencyName", 80);
+    const emergencyPhone = field(form, "emergencyPhone", 20);
+    if (!emergencyName || !emergencyPhone) return done("/personal/#emergency", { ok: false, message: "Add a name and phone number for your emergency contact." });
+    updateStudent({ emergencyName, emergencyRelation: field(form, "emergencyRelation", 40), emergencyPhone, emergencyUpdatedAt: nowSql() });
+    return done("/personal/#emergency", { ok: true, message: "Emergency contact confirmed" });
+  }
+  if (intent === "password") {
+    // A prototype: the password itself is never stored — only when it changed.
+    const next = String(form.get("newPassword") ?? "");
+    const again = String(form.get("confirmPassword") ?? "");
+    if (!String(form.get("currentPassword") ?? "")) return done("/personal/#password", { ok: false, message: "Enter your current password." });
+    if (next.length < 12 || !/[A-Za-z]/.test(next) || !/\d/.test(next)) return done("/personal/#password", { ok: false, message: "Use at least 12 characters with letters and numbers." });
+    if (next !== again) return done("/personal/#password", { ok: false, message: "The new passwords don't match." });
+    updateStudent({ passwordChangedAt: nowSql() });
+    return done("/personal/#password", { ok: true, message: "Password changed" });
+  }
+  return done("/personal/", { ok: false, message: "Unknown action." });
+}
+
+const student = getStudent();
+const fields = [student.preferredName, student.pronouns, student.personalEmail, student.phone, student.homeAddress, student.termAddress, student.emergencyName, student.emergencyPhone];
+const complete = Math.round((fields.filter(Boolean).length / fields.length) * 100);
+const emergencyAge = (Date.now() - new Date(`${student.emergencyUpdatedAt.replace(" ", "T")}Z`).getTime()) / 864e5;
+const PRONOUNS = ["", "she/her", "he/him", "they/them", "she/they", "he/they"];
+---
+
+<Shell title="Personal Data" nav="personal" art="hero-personal">
+  <Hero art="hero-personal" eyebrow="Personal Data" icon="user" favourite={{ path: "/personal/", label: "Personal Data" }}>
+    <h1 id="page-title" slot="title">Hi {student.preferredName}, <em>this is you</em></h1>
+    <p class="hero__lede" slot="lede">Keep your details current so the right messages reach you — and so we know who to call if something goes wrong.</p>
+    <div class="hero__stats">
+      <span class="stat-pill"><small>Student ID</small><strong>{student.uid}</strong></span>
+      <span class="stat-pill"><small>ANU email</small><strong class="trunc">{student.email}</strong></span>
+      <span class="stat-pill"><small>Profile complete</small><strong>{complete}%</strong></span>
+    </div>
+  </Hero>
+
+  <div class="grid grid-2 forms">
+    <section class="card rise" style="--i:1" id="names" aria-labelledby="names-title" data-flash-on-swap>
+      <div class="card__head">
+        <span class="card__icon"><Icon name="user" /></span>
+        <h2 id="names-title">Names</h2>
+      </div>
+      <form method="post" action="/personal/">
+        <input type="hidden" name="intent" value="names" />
+        <div class="form-grid">
+          <div class="field full">
+            <label for="legal">Legal name</label>
+            <input class="input" id="legal" value={`${student.legalGiven} ${student.legalFamily}`} readonly />
+            <small>Changing your legal name needs evidence — lodge it in <a href="/requests/?type=general#new">Requests</a>.</small>
+          </div>
+          <div class="field">
+            <label for="preferredName">Preferred name</label>
+            <input class="input" id="preferredName" name="preferredName" value={student.preferredName} maxlength="40" required autocomplete="nickname" />
+            <small>Used to greet you across ANU Hub.</small>
+          </div>
+          <div class="field">
+            <label for="pronouns">Pronouns</label>
+            <select class="select" id="pronouns" name="pronouns">
+              {PRONOUNS.map((p) => <option value={p} selected={student.pronouns === p}>{p || "Prefer not to say"}</option>)}
+            </select>
+          </div>
+        </div>
+        <div class="form-actions"><button class="btn" type="submit">Save names</button></div>
+      </form>
+    </section>
+
+    <section class="card rise" style="--i:2" aria-labelledby="identity-title">
+      <div class="card__head">
+        <span class="card__icon card__icon--plain"><Icon name="lock" /></span>
+        <h2 id="identity-title">Identity &amp; residency</h2>
+      </div>
+      <dl class="kv">
+        <dt>Student ID</dt><dd>{student.uid}</dd>
+        <dt>Date of birth</dt><dd>{formatDate(student.dateOfBirth, { day: "numeric", month: "long", year: "numeric" })}</dd>
+        <dt>Citizenship</dt><dd>{student.citizenship}</dd>
+        <dt>ANU email</dt><dd>{student.email}</dd>
+        <dt>Last updated</dt><dd>{timeAgo(student.updatedAt)}</dd>
+      </dl>
+      <p class="muted small note">These come from your admission record. Contact the Student Hub to correct them.</p>
+    </section>
+
+    <section class="card rise" style="--i:3" id="contact" aria-labelledby="contact-title" data-flash-on-swap>
+      <div class="card__head">
+        <span class="card__icon card__icon--gold"><Icon name="phone" /></span>
+        <h2 id="contact-title">Contact</h2>
+      </div>
+      <form method="post" action="/personal/">
+        <input type="hidden" name="intent" value="contact" />
+        <div class="form-grid">
+          <div class="field full">
+            <label for="personalEmail">Personal email</label>
+            <input class="input" id="personalEmail" name="personalEmail" type="email" value={student.personalEmail} maxlength="120" autocomplete="email" />
+          </div>
+          <div class="field full">
+            <label for="phone">Mobile</label>
+            <input class="input" id="phone" name="phone" type="tel" value={student.phone} maxlength="20" autocomplete="tel" />
+          </div>
+        </div>
+        <div class="form-actions"><button class="btn" type="submit">Save contact</button></div>
+      </form>
+    </section>
+
+    <section class="card rise" style="--i:4" id="address" aria-labelledby="address-title" data-flash-on-swap>
+      <div class="card__head">
+        <span class="card__icon card__icon--rust"><Icon name="pin" /></span>
+        <h2 id="address-title">Addresses</h2>
+      </div>
+      <form method="post" action="/personal/">
+        <input type="hidden" name="intent" value="address" />
+        <div class="form-grid">
+          <div class="field full">
+            <label for="termAddress">Term address</label>
+            <input class="input" id="termAddress" name="termAddress" value={student.termAddress} maxlength="160" autocomplete="street-address" />
+          </div>
+          <div class="field full">
+            <label for="homeAddress">Home address</label>
+            <input class="input" id="homeAddress" name="homeAddress" value={student.homeAddress} maxlength="160" />
+          </div>
+        </div>
+        <div class="form-actions"><button class="btn" type="submit">Save addresses</button></div>
+      </form>
+    </section>
+
+    <section class="card rise" style="--i:5" id="emergency" aria-labelledby="emergency-title" data-flash-on-swap>
+      <div class="card__head">
+        <span class="card__icon card__icon--rust"><Icon name="alert" /></span>
+        <h2 id="emergency-title">Emergency contact</h2>
+        <span class:list={["chip", emergencyAge > 365 ? "chip--warn" : "chip--ok"]}>{emergencyAge > 365 ? "Please confirm" : "Up to date"}</span>
+      </div>
+      <form method="post" action="/personal/">
+        <input type="hidden" name="intent" value="emergency" />
+        <div class="form-grid">
+          <div class="field">
+            <label for="emergencyName">Name</label>
+            <input class="input" id="emergencyName" name="emergencyName" value={student.emergencyName} maxlength="80" required />
+          </div>
+          <div class="field">
+            <label for="emergencyRelation">Relationship</label>
+            <input class="input" id="emergencyRelation" name="emergencyRelation" value={student.emergencyRelation} maxlength="40" />
+          </div>
+          <div class="field full">
+            <label for="emergencyPhone">Phone</label>
+            <input class="input" id="emergencyPhone" name="emergencyPhone" type="tel" value={student.emergencyPhone} maxlength="20" required />
+            <small>Last confirmed {formatDate(student.emergencyUpdatedAt.slice(0, 10), { day: "numeric", month: "long", year: "numeric" })}.</small>
+          </div>
+        </div>
+        <div class="form-actions"><button class="btn" type="submit">{emergencyAge > 365 ? "Confirm details" : "Save"}</button></div>
+      </form>
+    </section>
+
+    <section class="card rise" style="--i:6" id="password" aria-labelledby="password-title" data-flash-on-swap>
+      <div class="card__head">
+        <span class="card__icon"><Icon name="key" /></span>
+        <h2 id="password-title">Change Password</h2>
+      </div>
+      <p class="muted small">{student.passwordChangedAt ? `Last changed ${timeAgo(student.passwordChangedAt)}.` : "You haven't changed your password in ANU Hub yet."} Your password unlocks ANU Hub, Canvas, email and Wi-Fi.</p>
+      <form method="post" action="/personal/" autocomplete="off">
+        <input type="hidden" name="intent" value="password" />
+        <div class="form-grid">
+          <div class="field full">
+            <label for="currentPassword">Current password</label>
+            <input class="input" id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" required />
+          </div>
+          <div class="field">
+            <label for="newPassword">New password</label>
+            <input class="input" id="newPassword" name="newPassword" type="password" autocomplete="new-password" minlength="12" required data-strength="strength" />
+          </div>
+          <div class="field">
+            <label for="confirmPassword">Confirm new password</label>
+            <input class="input" id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required />
+          </div>
+          <div class="strength full" id="strength" data-score="0" aria-live="polite">
+            <span class="strength__bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <small data-strength-label>Enter a new password</small>
+          </div>
+        </div>
+        <div class="form-actions"><button class="btn" type="submit">Change password</button></div>
+      </form>
+    </section>
+  </div>
+</Shell>
+
+<style>
+  .forms {
+    align-items: start;
+  }
+  .small {
+    font-size: 0.86rem;
+  }
+  .note {
+    margin-top: 16px;
+  }
+  .trunc {
+    display: block;
+    max-width: 230px;
+    font-size: 1rem !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #password > p {
+    margin-bottom: 14px;
+  }
+  .strength {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .strength__bars {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    width: 160px;
+  }
+  .strength__bars i {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--track);
+    transition: background var(--med) var(--ease-out);
+  }
+  .strength[data-score="1"] i:nth-child(-n + 1) {
+    background: var(--rust);
+  }
+  .strength[data-score="2"] i:nth-child(-n + 2) {
+    background: var(--amber);
+  }
+  .strength[data-score="3"] i:nth-child(-n + 3) {
+    background: var(--teal);
+  }
+  .strength[data-score="4"] i {
+    background: var(--teal);
+  }
+  .strength small {
+    color: var(--muted);
+    font-weight: 600;
+  }
+</style>

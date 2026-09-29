@@ -1,0 +1,629 @@
+---
+import Hero from "../components/Hero.astro";
+import Icon from "../components/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { CURRENT_TERM, TERMS, TERM_ORDER } from "../lib/catalog";
+import { allocate, allocationsFor, slotsFor, upcomingEvents } from "../lib/data";
+import { DAYS, DAYS_SHORT, formatDate, formatTime, minutesNow, relativeDay, weekdayIndex } from "../lib/format";
+import { done } from "../lib/http";
+import { loadHub } from "../lib/hub";
+import { minutes, overlaps } from "../lib/rules";
+import type { ClassSlot } from "../lib/schema";
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const slotId = Number(form.get("slotId"));
+  const term = String(form.get("term") ?? CURRENT_TERM);
+  const r = Number.isInteger(slotId) ? allocate(slotId) : { ok: false as const, message: "Pick a class first." };
+  const code = String(form.get("code") ?? "");
+  return done(`/timetable/?term=${encodeURIComponent(term)}#allocate-${code}`, r);
+}
+
+const hub = loadHub();
+const { rows, today } = hub;
+const terms = [...new Set(rows.filter((r) => r.status === "enrolled" && TERM_ORDER.indexOf(r.term) >= TERM_ORDER.indexOf(CURRENT_TERM)).map((r) => r.term))].sort(
+  (a, b) => TERM_ORDER.indexOf(a) - TERM_ORDER.indexOf(b),
+);
+if (!terms.includes(CURRENT_TERM)) terms.unshift(CURRENT_TERM);
+const requested = Astro.url.searchParams.get("term") ?? "";
+const term = terms.includes(requested) ? requested : CURRENT_TERM;
+const t = TERMS[term];
+
+const enrolled = rows.filter((r) => r.term === term && r.status === "enrolled");
+const codes = enrolled.map((r) => r.courseCode);
+const slots = slotsFor(term, codes);
+const allocations = allocationsFor(term);
+const mine = new Set(allocations.map((a) => a.slotId));
+const chosen = slots.filter((s) => mine.has(s.id));
+
+const PALETTE = ["gold", "teal", "rust", "plum", "sky"];
+const colour = new Map(codes.map((c, i) => [c, PALETTE[i % PALETTE.length]]));
+const title = new Map(enrolled.map((r) => [r.courseCode, r.course.title]));
+
+const START = 8 * 60;
+const END = 19 * 60;
+const row = (hhmm: string) => Math.round((minutes(hhmm) - START) / 30) + 2;
+const hours = Array.from({ length: (END - START) / 60 }, (_, i) => 8 + i);
+
+const hoursPerWeek = chosen.reduce((s, x) => s + (minutes(x.end) - minutes(x.start)) / 60, 0);
+const activities = (code: string) => [...new Set(slots.filter((s) => s.courseCode === code).map((s) => s.activity))].sort((a, b) => Number(b === "Lecture") - Number(a === "Lecture"));
+const totalActivities = codes.reduce((n, c) => n + activities(c).length, 0);
+const allocatedCount = new Set(allocations.map((a) => `${a.courseCode}|${a.activity}`)).size;
+
+const clashFor = (slot: ClassSlot) => chosen.filter((c) => c.id !== slot.id && !(c.courseCode === slot.courseCode && c.activity === slot.activity) && overlaps(c, slot));
+
+const dow = weekdayIndex();
+const nowMins = minutesNow();
+const isCurrent = term === CURRENT_TERM;
+const showNow = isCurrent && dow >= 1 && dow <= 5 && nowMins >= START && nowMins <= END;
+const until = (s: ClassSlot) => {
+  let days = (s.day - dow + 7) % 7;
+  if (days === 0 && minutes(s.start) <= nowMins) days = 7;
+  return days * 1440 + minutes(s.start);
+};
+const nextClass = isCurrent ? [...chosen].sort((a, b) => until(a) - until(b))[0] : undefined;
+const exams = upcomingEvents(today).filter((e) => e.kind === "exam" && e.courseCode && codes.includes(e.courseCode));
+---
+
+<Shell title="Timetables" nav="timetable" art="hero-timetable">
+  <Hero art="hero-timetable" eyebrow="Timetables · Allocate to Your Class" icon="calendar" favourite={{ path: "/timetable/", label: "Timetables" }}>
+    <h1 id="page-title" slot="title">Your week, <em>at a glance</em></h1>
+    <p class="hero__lede" slot="lede">
+      {t.label}: {codes.length} courses, {hoursPerWeek} hours of classes a week. Pick tutorials and labs right here — clashes and full classes are flagged before you choose.
+    </p>
+    <div class="hero__stats">
+      <a class="stat-pill" href="#allocate"><small>Classes allocated</small><strong>{allocatedCount} of {totalActivities}</strong></a>
+      <span class="stat-pill"><small>Hours per week</small><strong>{hoursPerWeek}</strong></span>
+      {nextClass && <span class="stat-pill"><small>Next class · {DAYS_SHORT[nextClass.day]} {formatTime(nextClass.start)}</small><strong>{nextClass.courseCode} {nextClass.activity}</strong></span>}
+      <a class="stat-pill" href="/api/timetable.ics" data-astro-prefetch="false"><small>Add to your calendar</small><strong class="row"><Icon name="download" size={18} />.ics</strong></a>
+    </div>
+  </Hero>
+
+  {
+    terms.length > 1 && (
+      <nav class="term-tabs rise" aria-label="Choose a semester" style="--i:1">
+        {terms.map((key) => (
+          <a href={`/timetable/?term=${key}`} aria-current={key === term ? "page" : undefined}>
+            {TERMS[key].label}
+          </a>
+        ))}
+      </nav>
+    )
+  }
+
+  <section class="card week rise" style="--i:2" aria-labelledby="week-title">
+    <div class="section-head">
+      <h2 id="week-title">{t.label} · weekly timetable</h2>
+      <div class="legend">
+        {codes.map((c) => <span><i class={`sw sw--${colour.get(c)}`}></i>{c}</span>)}
+      </div>
+    </div>
+    <div class="week__grid" style={`--rows:${(END - START) / 30}`} aria-hidden="true">
+      <span class="week__corner"></span>
+      {[1, 2, 3, 4, 5].map((d) => <span class:list={["week__day", isCurrent && d === dow && "is-today"]} style={`grid-column:${d + 1}`}>{DAYS_SHORT[d]}</span>)}
+      {hours.map((h, i) => <span class="week__hour" style={`grid-row:${i * 2 + 2}`}>{formatTime(`${String(h).padStart(2, "0")}:00`)}</span>)}
+      {[1, 2, 3, 4, 5].map((d) => <span class:list={["week__col", isCurrent && d === dow && "is-today"]} style={`grid-column:${d + 1}`}></span>)}
+      {
+        chosen.map((s, i) => (
+          <span
+            class:list={["block", `block--${colour.get(s.courseCode)}`, minutes(s.end) - minutes(s.start) <= 60 && "block--short"]}
+            style={`grid-column:${s.day + 1};grid-row:${row(s.start)} / ${row(s.end)};--i:${i}`}
+          >
+            <strong>{s.courseCode}</strong>
+            <span>{s.activity}</span>
+            <small>
+              {formatTime(s.start)}–{formatTime(s.end)} · {s.location}
+            </small>
+          </span>
+        ))
+      }
+      {
+        showNow && (
+          <span class="now-line" data-now-line style={`grid-column:${dow + 1};--now:${nowMins};--start:${START};--end:${END}`} />
+        )
+      }
+    </div>
+    <ol class="agenda">
+      {
+        [1, 2, 3, 4, 5].map((d) => {
+          const day = chosen.filter((s) => s.day === d).sort((a, b) => a.start.localeCompare(b.start));
+          return (
+            <li>
+              <strong class="agenda__day">{DAYS[d]}</strong>
+              {day.length ? (
+                <ul>
+                  {day.map((s) => (
+                    <li class={`agenda__item block--${colour.get(s.courseCode)}`}>
+                      <span class="mono">
+                        {formatTime(s.start)}–{formatTime(s.end)}
+                      </span>
+                      <span>
+                        <strong>
+                          {s.courseCode} {s.activity}
+                        </strong>
+                        <small>{s.location}</small>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p class="muted">No classes</p>
+              )}
+            </li>
+          );
+        })
+      }
+    </ol>
+  </section>
+
+  <section class="section" id="allocate" aria-labelledby="allocate-title">
+    <div class="section-head">
+      <div>
+        <h2 id="allocate-title">Allocate to Your Class</h2>
+        <p>Lectures are automatic. Choose one of each tutorial, lab or workshop — your choice saves instantly.</p>
+      </div>
+    </div>
+    <div class="stack">
+      {
+        enrolled.map((r, ci) => (
+          <article class="card alloc rise" id={`allocate-${r.courseCode}`} data-flash-on-swap style={`--i:${ci}`}>
+            <div class="card__head">
+              <span class={`sw sw--lg sw--${colour.get(r.courseCode)}`} aria-hidden="true" />
+              <h3>
+                <span class="code">{r.courseCode}</span> {r.course.title}
+              </h3>
+            </div>
+            {activities(r.courseCode).map((activity) => {
+              const options = slots.filter((s) => s.courseCode === r.courseCode && s.activity === activity);
+              const current = options.find((s) => mine.has(s.id));
+              if (activity === "Lecture") {
+                return (
+                  <p class="lecture">
+                    <Icon name="check" size={16} />
+                    <span>
+                      <strong>Lecture</strong> · {options.map((s) => `${DAYS[s.day]} ${formatTime(s.start)}–${formatTime(s.end)}, ${s.location}`).join("; ")} <span class="muted">(automatic)</span>
+                    </span>
+                  </p>
+                );
+              }
+              return (
+                <form method="post" action={`/timetable/?term=${term}`} class="activity">
+                  <input type="hidden" name="code" value={r.courseCode} />
+                  <input type="hidden" name="term" value={term} />
+                  <fieldset>
+                    <legend>
+                      {activity}
+                      {current ? <span class="chip chip--ok"><Icon name="check" />{current.label}</span> : <span class="chip chip--block"><Icon name="alert" />Not chosen yet</span>}
+                    </legend>
+                    <div class="options">
+                      {options.map((s) => {
+                        const full = s.taken >= s.capacity && s.id !== current?.id;
+                        const clashes = clashFor(s);
+                        const fill = Math.min(100, Math.round((s.taken / s.capacity) * 100));
+                        return (
+                          <label class:list={["option", full && "option--full", clashes.length > 0 && "option--clash"]}>
+                            <input type="radio" name="slotId" value={s.id} checked={s.id === current?.id} disabled={full} data-autosubmit />
+                            <span class="option__top">
+                              <strong>{s.label}</strong>
+                              {s.id === current?.id && <span class="chip chip--ok">Yours</span>}
+                              {full && <span class="chip chip--block">Full</span>}
+                              {clashes.length > 0 && <span class="chip chip--warn">Clashes with {clashes.map((c) => `${c.courseCode} ${c.activity.toLowerCase()}`).join(", ")}</span>}
+                            </span>
+                            <span class="option__when">
+                              {DAYS[s.day]} {formatTime(s.start)}–{formatTime(s.end)}
+                            </span>
+                            <span class="option__where">
+                              <Icon name="pin" size={14} />
+                              {s.location}
+                            </span>
+                            <span class="cap" aria-label={`${s.taken} of ${s.capacity} places taken`}>
+                              <span class="cap__bar"><span style={`width:${fill}%`} class:list={[fill >= 90 && "hot"]} /></span>
+                              <small>{Math.max(0, s.capacity - s.taken)} left</small>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <noscript>
+                      <button class="btn btn--sm">Save {activity.toLowerCase()}</button>
+                    </noscript>
+                  </fieldset>
+                </form>
+              );
+            })}
+          </article>
+        ))
+      }
+    </div>
+  </section>
+
+  {
+    exams.length > 0 && (
+      <section class="section" aria-labelledby="exams-title">
+        <div class="section-head">
+          <h2 id="exams-title">Exam timetable</h2>
+        </div>
+        <div class="grid grid-3">
+          {exams.map((e, i) => (
+            <div class="card exam rise" style={`--i:${i}`}>
+              <span class="date-badge">
+                <small>{formatDate(e.date, { month: "short" })}</small>
+                <strong>{formatDate(e.date, { day: "numeric" })}</strong>
+              </span>
+              <div>
+                <strong>{e.title.replace("Exam: ", "")}</strong>
+                <p class="muted">{e.description}</p>
+                <p class="row muted">
+                  <Icon name="pin" size={14} />
+                  {e.location} · {relativeDay(e.date, today)}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    )
+  }
+</Shell>
+
+<style>
+  .term-tabs {
+    display: flex;
+    gap: 8px;
+    margin: -6px 0 22px;
+    padding: 5px;
+    width: fit-content;
+    border-radius: 18px;
+    background: var(--surface-3);
+  }
+  .term-tabs a {
+    padding: 9px 18px;
+    border-radius: 14px;
+    color: var(--ink-2);
+    font-weight: 600;
+    font-size: 0.92rem;
+    text-decoration: none;
+  }
+  .term-tabs a[aria-current="page"] {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
+  .sw {
+    width: 12px;
+    height: 12px;
+    border-radius: 4px;
+    display: inline-block;
+    flex: none;
+  }
+  .sw--lg {
+    width: 14px;
+    height: 40px;
+    border-radius: 6px;
+  }
+  .sw--gold,
+  .block--gold {
+    --c: var(--gold);
+    --cs: var(--gold-soft);
+  }
+  .sw--teal,
+  .block--teal {
+    --c: var(--teal);
+    --cs: var(--teal-soft);
+  }
+  .sw--rust,
+  .block--rust {
+    --c: var(--rust);
+    --cs: var(--rust-soft);
+  }
+  .sw--plum,
+  .block--plum {
+    --c: light-dark(#7a4a8c, #c89be0);
+    --cs: light-dark(#efe3f4, rgb(200 155 224 / 16%));
+  }
+  .sw--sky,
+  .block--sky {
+    --c: light-dark(#2563a8, #8fbdf0);
+    --cs: light-dark(#e1ecf8, rgb(143 189 240 / 16%));
+  }
+  .sw {
+    background: var(--c);
+  }
+  .week {
+    padding: 22px 22px 26px;
+  }
+  .week__grid {
+    position: relative;
+    display: grid;
+    grid-template-columns: 58px repeat(5, minmax(0, 1fr));
+    grid-template-rows: 38px repeat(var(--rows), 26px);
+    column-gap: 8px;
+  }
+  .week__day {
+    grid-row: 1;
+    align-self: center;
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--ink-2);
+  }
+  .week__day.is-today {
+    color: var(--teal-strong);
+  }
+  .week__day.is-today::after {
+    content: "Today";
+    display: block;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .week__hour {
+    grid-column: 1;
+    grid-row-end: span 2;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--muted);
+    transform: translateY(-8px);
+  }
+  .week__col {
+    grid-row: 2 / -1;
+    border-radius: 14px;
+    background: repeating-linear-gradient(180deg, transparent 0 51px, var(--line) 51px 52px), var(--surface-2);
+  }
+  .week__col.is-today {
+    background: repeating-linear-gradient(180deg, transparent 0 51px, var(--line) 51px 52px), var(--teal-soft);
+  }
+  .block {
+    z-index: 1;
+    display: grid;
+    align-content: start;
+    gap: 1px;
+    margin: 2px 0;
+    padding: 7px 10px;
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--cs);
+    box-shadow:
+      inset 3px 0 0 var(--c),
+      var(--shadow-sm);
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 0.8rem;
+    line-height: 1.3;
+    animation: pop-in 0.5s var(--ease-spring) both;
+    animation-delay: calc(var(--i) * 40ms + 150ms);
+    transition:
+      transform var(--med) var(--ease-out),
+      box-shadow var(--med);
+  }
+  .block:hover {
+    transform: scale(1.02);
+    box-shadow:
+      inset 3px 0 0 var(--c),
+      var(--shadow-md);
+  }
+  .block small {
+    color: var(--ink-2);
+    font-size: 0.72rem;
+  }
+  .block--short {
+    grid-template-columns: auto 1fr;
+    column-gap: 6px;
+    align-content: center;
+  }
+  .block--short small {
+    display: none;
+  }
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+  }
+  .now-line {
+    z-index: 2;
+    grid-row: 2 / -1;
+    position: relative;
+    pointer-events: none;
+  }
+  .now-line::before {
+    content: "";
+    position: absolute;
+    left: -4px;
+    right: 0;
+    top: calc((var(--now) - var(--start)) / (var(--end) - var(--start)) * 100%);
+    height: 2px;
+    background: var(--rust);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--rust) 20%, transparent);
+  }
+  .now-line::after {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: calc((var(--now) - var(--start)) / (var(--end) - var(--start)) * 100% - 4px);
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--rust);
+  }
+  .agenda {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .alloc .card__head h3 {
+    font-size: 1.1rem;
+  }
+  .lecture {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    font-size: 0.9rem;
+    color: var(--ink-2);
+  }
+  .lecture .icon {
+    margin-top: 3px;
+    color: var(--teal);
+  }
+  .activity {
+    margin-top: 14px;
+  }
+  .activity fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+  }
+  .activity legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    font-weight: 650;
+  }
+  .options {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .option {
+    position: relative;
+    display: grid;
+    gap: 4px;
+    padding: 14px 14px 12px;
+    border-radius: 16px;
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    cursor: pointer;
+    transition:
+      box-shadow var(--fast),
+      background var(--fast),
+      transform var(--med) var(--ease-out);
+  }
+  .option:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      inset 0 0 0 1px var(--line-strong),
+      var(--shadow-md);
+  }
+  .option input {
+    position: absolute;
+    opacity: 0;
+  }
+  .option:has(input:checked) {
+    background: var(--teal-soft);
+    box-shadow: inset 0 0 0 2px var(--teal);
+  }
+  .option:has(input:focus-visible) {
+    box-shadow:
+      inset 0 0 0 2px var(--teal),
+      var(--ring);
+  }
+  .option--full {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .option--full:hover {
+    transform: none;
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
+  .option--clash:not(:has(input:checked)) {
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--amber) 50%, transparent);
+  }
+  .option__top {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .option__when {
+    font-weight: 600;
+  }
+  .option__where {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 0.84rem;
+  }
+  .cap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .cap__bar {
+    flex: 1;
+    height: 6px;
+    border-radius: 99px;
+    background: var(--track);
+    overflow: hidden;
+  }
+  .cap__bar span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--teal);
+    animation: grow 0.9s var(--ease-out) both 0.2s;
+  }
+  .cap__bar span.hot {
+    background: var(--rust);
+  }
+  .cap small {
+    font-size: 0.75rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .exam {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+  }
+  .exam p {
+    font-size: 0.86rem;
+  }
+  @media (max-width: 720px) {
+    .week__grid {
+      display: none;
+    }
+    .agenda {
+      position: static;
+      width: auto;
+      height: auto;
+      overflow: visible;
+      clip: auto;
+      display: grid;
+      gap: 14px;
+    }
+    .agenda ul {
+      list-style: none;
+      margin: 6px 0 0;
+      padding: 0;
+      display: grid;
+      gap: 6px;
+    }
+    .agenda__item {
+      display: flex;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: var(--cs);
+      box-shadow: inset 3px 0 0 var(--c);
+      font-size: 0.88rem;
+    }
+    .agenda__item span:last-child {
+      display: grid;
+    }
+    .agenda__item small {
+      color: var(--muted);
+    }
+  }
+</style>
