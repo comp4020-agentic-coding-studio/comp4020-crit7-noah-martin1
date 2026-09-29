@@ -1,14 +1,17 @@
 ---
 // README.md, rendered: what this app is and what good looks like here,
 // published with the app. spec/readme.test.ts checks the whole of it is here.
-import * as readme from "../../README.md";
+// Rendered with the same processor the spec uses, rather than a Markdown
+// import, so images stay plain files instead of runtime /_image transforms.
+import { createMarkdownProcessor } from "@astrojs/markdown-remark";
+import source from "../../README.md?raw";
 import Shell from "../layouts/Shell.astro";
 
-const title = readme.getHeadings().find((h) => h.depth === 1)?.text ?? "README";
+const title = source.match(/^#\s+(.+)$/m)?.[1] ?? "README";
 
 // README images are committed to public/ and linked relatively (public/x.png)
 // so they render on GitHub; here they're served from the site root.
-const html = (await readme.compiledContent()).replace(/(src|href)="public\//g, '$1="/');
+const html = (await (await createMarkdownProcessor()).render(source)).code.replace(/(src|href)="public\//g, '$1="/');
 ---
 
 <Shell title={title} nav="readme">
